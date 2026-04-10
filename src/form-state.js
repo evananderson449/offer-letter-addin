@@ -392,11 +392,13 @@ function formatDate(dateStr) {
     const date = new Date(dateStr + 'T00:00:00');
     if (isNaN(date.getTime())) return '';
 
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
+    var formatted = date.toLocaleDateString('en-US', {
       month: 'long',
       day: 'numeric',
     });
+    // Always use 4-digit year (toLocaleDateString can truncate leading zeros)
+    var year = date.getFullYear().toString().padStart(4, '0');
+    return formatted + ', ' + year;
   } catch (e) {
     return '';
   }

@@ -473,20 +473,17 @@ window.generateAndDownload = async function () {
 
     // STEP 3: Download
     downloadDocx(modifiedBytes, filename);
+    showStatus('Downloaded ' + filename, 'success');
 
-    // STEP 4: Revert document back to original placeholders
-    try {
-      await revertDocument();
-    } catch (e) {
-      console.error('Revert failed (download succeeded):', e);
-    }
-
-    // STEP 5: Reset form for next offer
+    // STEP 4: Reset form immediately (don't wait for document revert)
     if (typeof window.resetForm === 'function') {
       window.resetForm();
     }
 
-    showStatus('Downloaded ' + filename, 'success');
+    // STEP 5: Revert document in background (don't block — takes ~3s via OOXML)
+    revertDocument().catch(function (e) {
+      console.error('Revert failed (download succeeded):', e);
+    });
   } catch (error) {
     console.error('Error:', error);
     showStatus('Error: ' + error.message, 'error');

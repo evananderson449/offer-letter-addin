@@ -151,13 +151,20 @@ async function refreshPreview() {
 
 /**
  * Schedule a debounced preview refresh (500ms after last input).
- * Preview only uses Word.run search/replace — no getFileAsync needed here.
- * Template bytes are cached separately on the first Generate click (user gesture).
+ * If a previous refresh is still running (Word.run in progress),
+ * re-schedule instead of silently dropping the update.
  */
 window.schedulePreviewRefresh = function () {
   if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
   previewRefreshTimer = setTimeout(async function () {
-    if (previewRunning) return;
+    if (previewRunning) {
+      // Word.run still in progress — re-schedule in 1s instead of dropping
+      console.log('Preview busy, re-scheduling...');
+      previewRefreshTimer = setTimeout(function () {
+        window.schedulePreviewRefresh();
+      }, 1000);
+      return;
+    }
     previewRunning = true;
     try {
       await refreshPreview();

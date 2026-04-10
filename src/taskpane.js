@@ -67,51 +67,36 @@ function getDesiredPreview() {
 }
 
 /**
- * Batch search-and-replace: performs all changes in a SINGLE Word.run call
- * with only 2 context.sync() round-trips (one to search, one to replace).
+ * Replace text in the document using OOXML get/set.
+ * Avoids the Word search API entirely (which hangs on bracket characters).
+ * Gets the body OOXML, does string replacement in JS, sets it back.
  * @param {Array<{from: string, to: string}>} changes
  */
-async function batchSearchAndReplace(changes) {
+async function replaceInDocument(changes) {
   if (changes.length === 0) return;
   try {
     await Word.run(async (context) => {
-      // Queue ALL searches at once
-      var searchOps = [];
-      for (var i = 0; i < changes.length; i++) {
-        searchOps.push({
-          change: changes[i],
-          results: context.document.body.search(changes[i].from, {
-            matchCase: true,
-            matchWholeWord: false,
-            matchWildcards: false
-          })
-        });
-      }
-
-      // Load all results in one sync
-      for (var j = 0; j < searchOps.length; j++) {
-        searchOps[j].results.load('text');
-      }
+      // Get the body OOXML (contains all text + formatting)
+      var ooxmlResult = context.document.body.getOoxml();
       await context.sync();
 
-      // Queue all replacements
-      var hasReplacements = false;
-      for (var k = 0; k < searchOps.length; k++) {
-        var items = searchOps[k].results.items;
-        console.log('Search "' + searchOps[k].change.from + '": ' + items.length + ' hit(s)');
-        for (var m = 0; m < items.length; m++) {
-          items[m].insertText(searchOps[k].change.to, "Replace");
-          hasReplacements = true;
-        }
+      // Do all replacements on the XML string
+      var xml = ooxmlResult.value;
+      for (var i = 0; i < changes.length; i++) {
+        var fromXml = escapeXml(changes[i].from);
+        var toXml = escapeXml(changes[i].to);
+        var before = xml;
+        xml = xml.split(fromXml).join(toXml);
+        var replaced = (before !== xml);
+        console.log((replaced ? '✓' : '✗') + ' "' + changes[i].from + '" → "' + changes[i].to + '"');
       }
 
-      // Apply all replacements in one sync
-      if (hasReplacements) {
-        await context.sync();
-      }
+      // Set the modified OOXML back
+      context.document.body.insertOoxml(xml, "Replace");
+      await context.sync();
     });
   } catch (e) {
-    console.error('batchSearchAndReplace error:', e);
+    console.error('replaceInDocument error:', e);
   }
 }
 
@@ -141,7 +126,7 @@ async function refreshPreview() {
   if (changes.length === 0) return;
   console.log('Preview: updating ' + changes.length + ' field(s)');
 
-  await batchSearchAndReplace(changes);
+  await replaceInDocument(changes);
 
   // Update state after successful batch
   for (var i = 0; i < changes.length; i++) {
@@ -197,7 +182,7 @@ async function revertDocument() {
   if (changes.length === 0) return;
   console.log('Reverting ' + changes.length + ' placeholder(s)');
 
-  await batchSearchAndReplace(changes);
+  await replaceInDocument(changes);
 
   // Reset state
   for (var i = 0; i < changes.length; i++) {

@@ -151,23 +151,15 @@ async function refreshPreview() {
 
 /**
  * Schedule a debounced preview refresh (500ms after last input).
- * Lazily caches template bytes before the FIRST preview modification.
+ * Preview only uses Word.run search/replace — no getFileAsync needed here.
+ * Template bytes are cached separately on the first Generate click (user gesture).
  */
 window.schedulePreviewRefresh = function () {
   if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
   previewRefreshTimer = setTimeout(async function () {
-    if (previewRunning) {
-      console.log('Preview already running, skipping');
-      return;
-    }
+    if (previewRunning) return;
     previewRunning = true;
     try {
-      // Cache template bytes ONCE, before the first preview modification
-      if (!cachedTemplateBytes) {
-        console.log('Caching template bytes before first preview...');
-        cachedTemplateBytes = await getDocumentBytes();
-        console.log('Template bytes cached (' + cachedTemplateBytes.length + ' bytes)');
-      }
       await refreshPreview();
     } catch (e) {
       console.error('Preview refresh error:', e);
@@ -421,14 +413,18 @@ window.generateAndDownload = async function () {
       btn.textContent = 'Generating & Resetting...';
     }
 
-    // STEP 1: Get template bytes — use cache if available, otherwise read once
+    // STEP 1: Get template bytes
+    // First time: revert any preview changes so we read clean template, then cache.
+    // Subsequent times: use cached bytes (original template is preserved).
     let templateBytes;
     try {
       if (cachedTemplateBytes) {
         console.log('Using cached template bytes');
         templateBytes = cachedTemplateBytes;
       } else {
-        console.log('Reading template bytes (first time)');
+        console.log('First generate: reverting preview to read clean template...');
+        await revertDocument();
+        console.log('Reading template bytes...');
         templateBytes = await getDocumentBytes();
         cachedTemplateBytes = templateBytes;
         console.log('Template bytes cached (' + templateBytes.length + ' bytes)');

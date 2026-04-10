@@ -147,6 +147,20 @@ function initFormState() {
 
   // Initial form status check
   checkFormStatus();
+
+  // Live preview: trigger debounced preview refresh on any form input/change
+  if (form) {
+    form.addEventListener('input', () => {
+      if (typeof window.schedulePreviewRefresh === 'function') {
+        window.schedulePreviewRefresh();
+      }
+    });
+    form.addEventListener('change', () => {
+      if (typeof window.schedulePreviewRefresh === 'function') {
+        window.schedulePreviewRefresh();
+      }
+    });
+  }
 }
 
 /**
@@ -379,7 +393,35 @@ function formatDate(dateStr) {
   }
 }
 
+/**
+ * Reset the form to its initial blank state
+ */
+function resetForm() {
+  const form = document.getElementById('offerForm');
+  if (form) form.reset();
+
+  // Reset internal state tracking
+  formState = {
+    f_name: '', f_title: '', f_start_date: '', f_exempt: 'exempt',
+    f_supervisor: '', f_salary: '', bonusToggle: true,
+    f_bonus_pct_a: '', f_bonus_pct_b: '', f_bonus_dollar_a: '',
+    f_bonus_dollar_b: '', f_shares_pct: '', f_shares_num: '',
+    f_shares_val: '', f_expiration: ''
+  };
+
+  // Clear calculated field displays (form.reset doesn't clear readonly fields set via JS)
+  ['f_bonus_dollar_a', 'f_bonus_dollar_b', 'f_shares_num', 'f_shares_val'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+
+  // Restore bonus section visibility and status pill
+  toggleBonusFields(true);
+  checkFormStatus();
+}
+
 // Export functions to window object for cross-file access
+window.resetForm = resetForm;
 window.initFormState = initFormState;
 window.getFormData = getFormData;
 window.calculateBonus = calculateBonus;

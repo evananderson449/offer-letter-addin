@@ -17,6 +17,139 @@
 // Word Online doesn't reliably support rapid consecutive getFileAsync calls.
 let cachedTemplateBytes = null;
 
+// ===== LIVE PREVIEW SYSTEM =====
+// Tracks what's currently displayed in the document for each placeholder.
+// On field change: search for current text, replace with form value.
+// On generate+reset: revert all replacements back to original placeholders.
+
+const SIMPLE_PLACEHOLDERS = [
+  '[NAME]', '[TITLE]', '[START DATE]', '[SUPERVISOR]', '[SALARY]',
+  '[BONUS A %]', '[BONUS B %]', '[BONUS A $]', '[BONUS B $]',
+  '[# OF SHARES]', '[SHARES %]', '[EXPIRATION DATE]'
+];
+
+// Current displayed text for each tracked slot
+const previewState = {};
+for (const p of SIMPLE_PLACEHOLDERS) {
+  previewState[p] = p;
+}
+// EXEMPT appears twice with different contexts — track separately
+previewState['__EXEMPT_CLASS__'] = '[EXEMPT]';
+previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
+
+let previewRefreshTimer = null;
+
+/**
+ * Compute what each placeholder slot should currently display, based on form state.
+ * Empty fields fall back to the original placeholder text (no change in doc).
+ */
+function getDesiredPreview() {
+  const raw = window.getFormData();
+  const d = {};
+  d['[NAME]'] = raw.f_name || '[NAME]';
+  d['[TITLE]'] = raw.f_title || '[TITLE]';
+  d['[START DATE]'] = raw.f_start_date ? window.formatDate(raw.f_start_date) : '[START DATE]';
+  d['[SUPERVISOR]'] = raw.f_supervisor || '[SUPERVISOR]';
+  d['[SALARY]'] = raw.f_salary ? window.formatCurrency(parseFloat(raw.f_salary) || 0) : '[SALARY]';
+  d['[BONUS A %]'] = raw.f_bonus_pct_a || '[BONUS A %]';
+  d['[BONUS B %]'] = raw.f_bonus_pct_b || '[BONUS B %]';
+  d['[BONUS A $]'] = document.getElementById('f_bonus_dollar_a')?.value || '[BONUS A $]';
+  d['[BONUS B $]'] = document.getElementById('f_bonus_dollar_b')?.value || '[BONUS B $]';
+  d['[# OF SHARES]'] = document.getElementById('f_shares_num')?.value || '[# OF SHARES]';
+  d['[SHARES %]'] = raw.f_shares_pct || '[SHARES %]';
+  d['[EXPIRATION DATE]'] = raw.f_expiration ? window.formatDate(raw.f_expiration) : '[EXPIRATION DATE]';
+
+  const isExempt = raw.f_exempt === 'exempt';
+  d['__EXEMPT_CLASS__'] = isExempt ? 'Exempt' : 'Non-Exempt';
+  d['__EXEMPT_ELIG__'] = isExempt ? 'will not be eligible' : 'will be eligible';
+  return d;
+}
+
+/**
+ * Search for exact text in the document body and replace all occurrences.
+ */
+async function searchAndReplace(searchText, replaceText) {
+  if (searchText === replaceText) return;
+  try {
+    await Word.run(async (context) => {
+      const results = context.document.body.search(searchText, {
+        matchCase: true,
+        matchWholeWord: false
+      });
+      results.load('text');
+      await context.sync();
+      for (let i = 0; i < results.items.length; i++) {
+        results.items[i].insertText(replaceText, Word.InsertLocation.replace);
+      }
+      if (results.items.length > 0) {
+        await context.sync();
+      }
+    });
+  } catch (e) {
+    console.error('Search/replace failed:', searchText, '→', replaceText, e);
+  }
+}
+
+/**
+ * Refresh the live preview — compare desired values to current state, update changed ones.
+ */
+async function refreshPreview() {
+  const desired = getDesiredPreview();
+
+  // Handle EXEMPT eligibility FIRST (more specific phrase match)
+  if (previewState['__EXEMPT_ELIG__'] !== desired['__EXEMPT_ELIG__']) {
+    await searchAndReplace(previewState['__EXEMPT_ELIG__'], desired['__EXEMPT_ELIG__']);
+    previewState['__EXEMPT_ELIG__'] = desired['__EXEMPT_ELIG__'];
+  }
+
+  // Handle EXEMPT classification (remaining [EXEMPT] occurrences)
+  if (previewState['__EXEMPT_CLASS__'] !== desired['__EXEMPT_CLASS__']) {
+    await searchAndReplace(previewState['__EXEMPT_CLASS__'], desired['__EXEMPT_CLASS__']);
+    previewState['__EXEMPT_CLASS__'] = desired['__EXEMPT_CLASS__'];
+  }
+
+  // Handle all simple placeholders
+  for (const p of SIMPLE_PLACEHOLDERS) {
+    if (previewState[p] !== desired[p]) {
+      await searchAndReplace(previewState[p], desired[p]);
+      previewState[p] = desired[p];
+    }
+  }
+}
+
+/**
+ * Schedule a debounced preview refresh (500ms after last input).
+ */
+window.schedulePreviewRefresh = function () {
+  if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
+  previewRefreshTimer = setTimeout(() => {
+    refreshPreview().catch(e => console.error('Preview refresh error:', e));
+  }, 500);
+};
+
+/**
+ * Revert all preview replacements back to original placeholder text.
+ */
+async function revertDocument() {
+  // Revert simple placeholders
+  for (const p of SIMPLE_PLACEHOLDERS) {
+    if (previewState[p] !== p) {
+      await searchAndReplace(previewState[p], p);
+      previewState[p] = p;
+    }
+  }
+  // Revert EXEMPT classification
+  if (previewState['__EXEMPT_CLASS__'] !== '[EXEMPT]') {
+    await searchAndReplace(previewState['__EXEMPT_CLASS__'], '[EXEMPT]');
+    previewState['__EXEMPT_CLASS__'] = '[EXEMPT]';
+  }
+  // Revert EXEMPT eligibility
+  if (previewState['__EXEMPT_ELIG__'] !== 'will [EXEMPT] be eligible') {
+    await searchAndReplace(previewState['__EXEMPT_ELIG__'], 'will [EXEMPT] be eligible');
+    previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
+  }
+}
+
 Office.onReady((info) => {
   if (info.host === Office.HostType.Word) {
     console.log('Handl Offer Letter Generator ready');
@@ -229,7 +362,7 @@ window.generateAndDownload = async function () {
     const btn = document.getElementById('generateLetterBtn');
     if (btn) {
       btn.disabled = true;
-      btn.textContent = 'Generating...';
+      btn.textContent = 'Generating & Resetting...';
     }
 
     // STEP 1: Get template bytes — use cache if available, otherwise read once
@@ -284,6 +417,19 @@ window.generateAndDownload = async function () {
 
     // STEP 3: Download
     downloadDocx(modifiedBytes, filename);
+
+    // STEP 4: Revert document back to original placeholders
+    try {
+      await revertDocument();
+    } catch (e) {
+      console.error('Revert failed (download succeeded):', e);
+    }
+
+    // STEP 5: Reset form for next offer
+    if (typeof window.resetForm === 'function') {
+      window.resetForm();
+    }
+
     showStatus('Downloaded ' + filename, 'success');
   } catch (error) {
     console.error('Error:', error);
@@ -292,7 +438,7 @@ window.generateAndDownload = async function () {
     const btn = document.getElementById('generateLetterBtn');
     if (btn) {
       btn.disabled = false;
-      btn.textContent = 'Generate & Download';
+      btn.textContent = 'Generate Offer & Reset Form';
     }
   }
 };

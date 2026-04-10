@@ -1,56 +1,27 @@
 /**
  * Handl Offer Letter Generator - Taskpane Integration Layer
  *
- * Strategy: Replace placeholders in the CURRENT document. Track previously
- * inserted values so we can find-and-replace them again when the form changes.
- * This allows live updating without destroying the template — the user should
- * first make a copy of the template (SharePoint "Make a copy"), then use the add-in.
+ * STRATEGY: Capture → Replace in Memory → Download
+ * 1. User fills in form on the taskpane
+ * 2. Clicks "Generate & Download"
+ * 3. Add-in reads the template document bytes via getFileAsync
+ * 4. Uses JSZip to open the .docx in memory
+ * 5. Replaces all placeholders in word/document.xml
+ * 6. Downloads the modified .docx as Handl_Offer_Letter_[Name].docx
  *
- * The add-in shows a one-time reminder to make a copy before generating.
+ * The template is NEVER modified. All work happens in memory.
  */
-
-// Track the last values we inserted so we can find and replace them on update
-let _lastInserted = {};
-let _hasGenerated = false;
-let _copyConfirmed = false;
-let _liveUpdateTimer = null;
-const LIVE_UPDATE_DELAY = 800;
 
 Office.onReady((info) => {
   if (info.host === Office.HostType.Word) {
     console.log('Handl Offer Letter Generator ready');
     window.initFormState();
     window.initializeAddIn();
-    setupLiveUpdate();
   }
 });
 
 /**
- * Attach debounced live update to all form fields.
- * Only fires after first Generate, so the user clicks once to confirm,
- * then subsequent edits auto-update.
- */
-function setupLiveUpdate() {
-  const form = document.getElementById('offerForm');
-  if (!form) return;
-  form.addEventListener('input', debouncedLiveUpdate);
-  form.addEventListener('change', debouncedLiveUpdate);
-}
-
-function debouncedLiveUpdate() {
-  // Only live-update after the user has clicked Generate at least once
-  if (!_hasGenerated) return;
-  if (!window.checkFormStatus()) return;
-
-  clearTimeout(_liveUpdateTimer);
-  _liveUpdateTimer = setTimeout(() => {
-    console.log('Live update triggered');
-    window.updateDocument();
-  }, LIVE_UPDATE_DELAY);
-}
-
-/**
- * Build the formData object from raw form values
+ * Build form data object with formatted values for placeholder replacement
  */
 function buildFormData() {
   const raw = window.getFormData();
@@ -73,231 +44,44 @@ function buildFormData() {
 }
 
 /**
- * The placeholder map: keys are placeholder IDs, values are the EXACT bracket
- * text found in the template XML. These were verified by parsing the .docx.
- *
- * IMPORTANT: The template has SEPARATE placeholders for each bonus field,
- * not combined ranges. e.g. [BONUS A %] and [BONUS B %] are separate.
+ * Read the current document as a Uint8Array via Office.js getFileAsync
  */
-// Verified against actual template XML — these are the EXACT placeholders.
-// [TITLE] appears 2x (both get same replacement). [EXEMPT] appears 2x but
-// needs DIFFERENT handling — handled separately below.
-// There is NO [$ SHARES] placeholder in the template.
-const PLACEHOLDERS = {
-  name:            '[NAME]',
-  title:           '[TITLE]',
-  startDate:       '[START DATE]',
-  supervisor:      '[SUPERVISOR]',
-  salary:          '[SALARY]',
-  bonusPctA:       '[BONUS A %]',
-  bonusPctB:       '[BONUS B %]',
-  bonusDollarA:    '[BONUS A $]',
-  bonusDollarB:    '[BONUS B $]',
-  sharesNum:       '[# OF SHARES]',
-  sharesPct:       '[SHARES %]',
-  expirationDate:  '[EXPIRATION DATE]'
-};
-
-// EXEMPT is handled specially because it appears twice with different meanings:
-// 1) "classified as [EXEMPT]" → replace with "Exempt" or "Non-Exempt"
-// 2) "you will [EXEMPT] be eligible" → replace with "not" (if Exempt) or "" (if Non-Exempt)
-// We handle this by searching for the contextual phrase instead of just [EXEMPT].
-
-/**
- * Generate Letter — replaces placeholders (or previously inserted values) with form data.
- * First click: shows copy reminder. Second click (or after confirm): does replacements.
- */
-window.updateDocument = async function() {
-  try {
-    // Validate required fields
-    if (!window.checkFormStatus()) {
-      showStatus('Please fill in all required fields.', 'error');
-      return;
-    }
-
-    // On first click, remind user to make a copy
-    if (!_copyConfirmed && !_hasGenerated) {
-      _copyConfirmed = true;
-      showStatus('Important: Make sure you are working on a COPY of the template, not the original. Click "Generate Letter" again to proceed.', 'info');
-      return;
-    }
-
-    const formData = buildFormData();
-    showStatus('Updating offer letter...', 'info');
-
-    await Word.run(async (context) => {
-      const body = context.document.body;
-
-      // For each field, determine what to search for:
-      // - First time: search for the original [PLACEHOLDER] bracket text
-      // - Subsequent times: search for the previously inserted value
-      for (const [key, originalPlaceholder] of Object.entries(PLACEHOLDERS)) {
-        const newValue = formData[key];
-        if (!newValue && newValue !== '') continue;
-
-        const searchFor = _hasGenerated ? (_lastInserted[key] || originalPlaceholder) : originalPlaceholder;
-
-        // Skip if the value hasn't changed
-        if (_hasGenerated && searchFor === newValue) continue;
-
-        const searchResults = body.search(searchFor, { matchCase: true, matchWholeWord: false });
-        searchResults.load('items');
-        await context.sync();
-
-        for (let i = 0; i < searchResults.items.length; i++) {
-          searchResults.items[i].insertText(newValue, Word.InsertLocation.replace);
-        }
-
-        // Track what we inserted so we can find it next time
-        _lastInserted[key] = newValue;
-      }
-
-      await context.sync();
-
-      // Handle EXEMPT — two different contexts:
-      // 1) "classified as [EXEMPT]" → "Exempt" or "Non-Exempt"
-      // 2) "will [EXEMPT] be eligible" → "not" (if Exempt) or "" (if Non-Exempt)
-      if (!_hasGenerated) {
-        // First generate: search for "classified as [EXEMPT]" context
-        // Just replace all [EXEMPT] occurrences — first one gets the label,
-        // but since body.search replaces ALL matches, we handle it differently.
-        // Replace the contextual phrase "will [EXEMPT] be eligible" FIRST (more specific)
-        try {
-          const exemptEligible = formData.exempt === 'Exempt' ? 'will not be eligible' : 'will be eligible';
-          const willExemptResults = body.search('will [EXEMPT] be eligible', { matchCase: false, matchWholeWord: false });
-          willExemptResults.load('items');
-          await context.sync();
-          for (let i = 0; i < willExemptResults.items.length; i++) {
-            willExemptResults.items[i].insertText(exemptEligible, Word.InsertLocation.replace);
-          }
-          _lastInserted._exemptEligible = exemptEligible;
-          await context.sync();
-        } catch (e) {
-          console.warn('Exempt eligibility replacement:', e);
-        }
-
-        // Now replace the remaining [EXEMPT] (the classification label)
-        try {
-          const classifiedResults = body.search('[EXEMPT]', { matchCase: true, matchWholeWord: false });
-          classifiedResults.load('items');
-          await context.sync();
-          for (let i = 0; i < classifiedResults.items.length; i++) {
-            classifiedResults.items[i].insertText(formData.exempt, Word.InsertLocation.replace);
-          }
-          _lastInserted._exemptLabel = formData.exempt;
-          await context.sync();
-        } catch (e) {
-          console.warn('Exempt label replacement:', e);
-        }
-      } else {
-        // Subsequent updates: search for previously inserted values
-        try {
-          if (_lastInserted._exemptEligible) {
-            const newEligible = formData.exempt === 'Exempt' ? 'will not be eligible' : 'will be eligible';
-            if (newEligible !== _lastInserted._exemptEligible) {
-              const eligResults = body.search(_lastInserted._exemptEligible, { matchCase: false, matchWholeWord: false });
-              eligResults.load('items');
-              await context.sync();
-              for (let i = 0; i < eligResults.items.length; i++) {
-                eligResults.items[i].insertText(newEligible, Word.InsertLocation.replace);
-              }
-              _lastInserted._exemptEligible = newEligible;
-            }
-          }
-          if (_lastInserted._exemptLabel && _lastInserted._exemptLabel !== formData.exempt) {
-            const labelResults = body.search(_lastInserted._exemptLabel, { matchCase: true, matchWholeWord: true });
-            labelResults.load('items');
-            await context.sync();
-            for (let i = 0; i < labelResults.items.length; i++) {
-              labelResults.items[i].insertText(formData.exempt, Word.InsertLocation.replace);
-            }
-            _lastInserted._exemptLabel = formData.exempt;
-          }
-          await context.sync();
-        } catch (e) {
-          console.warn('Exempt update:', e);
-        }
-      }
-
-      // Handle bonus paragraph deletion (only on first generate when toggled off)
-      if (!formData.bonusEnabled && !_hasGenerated) {
-        try {
-          const bonusResults = body.search('Discretionary, performance-based bonus', { matchCase: false, matchWholeWord: false });
-          bonusResults.load('items');
-          await context.sync();
-          for (let i = 0; i < bonusResults.items.length; i++) {
-            const paragraphs = bonusResults.items[i].paragraphs;
-            paragraphs.load('items');
-            await context.sync();
-            if (paragraphs.items.length > 0) {
-              paragraphs.items[0].delete();
-            }
-          }
-          await context.sync();
-        } catch (e) {
-          console.warn('Bonus paragraph deletion:', e);
-        }
-      }
-    });
-
-    _hasGenerated = true;
-    showStatus('Offer letter updated! Changes will auto-sync as you edit the form.', 'success');
-  } catch (error) {
-    console.error('Error generating offer letter:', error);
-    showStatus('Error: ' + error.message, 'error');
-  }
-};
-
-/**
- * Save As: Download the current document with the correct filename
- */
-window.saveDocument = async function() {
-  try {
-    const raw = window.getFormData();
-    const name = raw.f_name || 'Unknown';
-    const filename = `Handl_Offer_Letter_${name.replace(/\s+/g, '_')}.docx`;
-
-    showStatus('Preparing download...', 'info');
-
-    await new Promise((resolve, reject) => {
-      Office.context.document.getFileAsync(Office.FileType.Compressed, { sliceSize: 262144 }, function(result) {
+function getDocumentBytes() {
+  return new Promise((resolve, reject) => {
+    Office.context.document.getFileAsync(
+      Office.FileType.Compressed,
+      { sliceSize: 262144 },
+      function (result) {
         if (result.status !== Office.AsyncResultStatus.Succeeded) {
           reject(new Error(result.error ? result.error.message : 'Failed to get file'));
           return;
         }
-
         const file = result.value;
         const sliceCount = file.sliceCount;
         const sliceData = [];
 
         function readSlice(index) {
-          file.getSliceAsync(index, function(sliceResult) {
+          file.getSliceAsync(index, function (sliceResult) {
             if (sliceResult.status === Office.AsyncResultStatus.Succeeded) {
               sliceData.push(sliceResult.value.data);
               if (index + 1 < sliceCount) {
                 readSlice(index + 1);
               } else {
                 file.closeAsync();
-                const bytes = new Uint8Array(sliceData.reduce((acc, slice) => {
+                // Combine all slices into one Uint8Array
+                let totalLength = 0;
+                const arrays = sliceData.map((slice) => {
                   const arr = new Uint8Array(slice);
-                  const combined = new Uint8Array(acc.length + arr.length);
-                  combined.set(acc);
-                  combined.set(arr, acc.length);
-                  return combined;
-                }, new Uint8Array(0)));
-                const blob = new Blob([bytes], {
-                  type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                  totalLength += arr.length;
+                  return arr;
                 });
-                const url = window.URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = filename;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                window.URL.revokeObjectURL(url);
-                showStatus('Downloaded as ' + filename, 'success');
-                resolve();
+                const combined = new Uint8Array(totalLength);
+                let offset = 0;
+                for (const arr of arrays) {
+                  combined.set(arr, offset);
+                  offset += arr.length;
+                }
+                resolve(combined);
               }
             } else {
               file.closeAsync();
@@ -306,13 +90,200 @@ window.saveDocument = async function() {
           });
         }
         readSlice(0);
-      });
-    });
+      }
+    );
+  });
+}
+
+/**
+ * Trigger browser download of a byte array as .docx
+ */
+function downloadDocx(bytes, filename) {
+  const blob = new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
+
+/**
+ * Escape special XML characters in replacement values
+ */
+function escapeXml(str) {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * Replace placeholders in the document XML string.
+ * Handles placeholders that may be split across multiple XML runs
+ * by first joining adjacent <w:t> text nodes, doing replacements,
+ * then returning the modified XML.
+ */
+function replacePlaceholders(xml, formData) {
+  // Define all placeholder → value mappings
+  const replacements = [
+    { find: '[NAME]', replace: formData.name },
+    { find: '[TITLE]', replace: formData.title },
+    { find: '[START DATE]', replace: formData.startDate },
+    { find: '[SUPERVISOR]', replace: formData.supervisor },
+    { find: '[SALARY]', replace: formData.salary },
+    { find: '[BONUS A %]', replace: formData.bonusPctA },
+    { find: '[BONUS B %]', replace: formData.bonusPctB },
+    { find: '[BONUS A $]', replace: formData.bonusDollarA },
+    { find: '[BONUS B $]', replace: formData.bonusDollarB },
+    { find: '[# OF SHARES]', replace: formData.sharesNum },
+    { find: '[SHARES %]', replace: formData.sharesPct },
+    { find: '[EXPIRATION DATE]', replace: formData.expirationDate },
+  ];
+
+  let result = xml;
+
+  // Handle EXEMPT contextual replacement first (more specific match)
+  // "will [EXEMPT] be eligible" → "will not be eligible" (Exempt) or "will be eligible" (Non-Exempt)
+  const exemptPhrase =
+    formData.exempt === 'Exempt' ? 'will not be eligible' : 'will be eligible';
+
+  // Try direct text replacement first (placeholder in single run)
+  result = result.split('will [EXEMPT] be eligible').join(escapeXml(exemptPhrase));
+
+  // Also handle the case where [EXEMPT] is in its own XML run within the phrase
+  // Pattern: ...will </w:t></w:r>...<w:r>...<w:t...>[EXEMPT]</w:t></w:r>...<w:r>...<w:t...> be eligible...
+  // We handle this with a regex that matches across runs
+  const exemptRunRegex =
+    /(will\s*<\/w:t><\/w:r>[\s\S]*?<w:r[^>]*>[\s\S]*?<w:t[^>]*>)\[EXEMPT\](<\/w:t><\/w:r>[\s\S]*?<w:r[^>]*>[\s\S]*?<w:t[^>]*>\s*be eligible)/g;
+  result = result.replace(exemptRunRegex, function () {
+    // Replace the whole matched phrase with the resolved text in the first run
+    return escapeXml(exemptPhrase);
+  });
+
+  // Replace remaining standalone [EXEMPT] with the classification label
+  result = result.split('[EXEMPT]').join(escapeXml(formData.exempt));
+
+  // Replace all standard placeholders
+  for (const { find, replace } of replacements) {
+    if (replace === undefined || replace === null) continue;
+    // Simple string split/join — works when placeholder is in a single <w:t> run
+    result = result.split(find).join(escapeXml(replace));
+  }
+
+  // Handle bonus paragraph deletion if bonus is toggled off
+  if (!formData.bonusEnabled) {
+    result = deleteBonusParagraph(result);
+  }
+
+  return result;
+}
+
+/**
+ * Remove the paragraph containing "Discretionary, performance-based bonus" from XML
+ */
+function deleteBonusParagraph(xml) {
+  // Find <w:p> elements that contain the bonus text and remove them
+  const bonusText = 'Discretionary, performance-based bonus';
+  const paragraphRegex = /<w:p[ >][\s\S]*?<\/w:p>/g;
+
+  return xml.replace(paragraphRegex, function (match) {
+    if (match.indexOf(bonusText) !== -1) {
+      return ''; // Remove this paragraph entirely
+    }
+    return match;
+  });
+}
+
+/**
+ * MAIN ACTION: Generate & Download
+ *
+ * 1. Read the template document bytes (getFileAsync) — document is NOT modified
+ * 2. Use JSZip to open the .docx in memory
+ * 3. Replace all placeholders in word/document.xml
+ * 4. Generate the modified .docx and trigger browser download
+ */
+window.generateAndDownload = async function () {
+  try {
+    if (!window.checkFormStatus()) {
+      showStatus('Please fill in all required fields.', 'error');
+      return;
+    }
+
+    const formData = buildFormData();
+    const filename = `Handl_Offer_Letter_${formData.name.replace(/\s+/g, '_')}.docx`;
+
+    // Disable button while processing
+    const btn = document.getElementById('generateLetterBtn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+    }
+
+    // STEP 1: Read template bytes (document is NOT modified)
+    let templateBytes;
+    try {
+      templateBytes = await getDocumentBytes();
+    } catch (e) {
+      console.error('Failed to read template:', e);
+      showStatus('Error reading template. Please try again.', 'error');
+      return;
+    }
+
+    // STEP 2: Open .docx with JSZip and replace placeholders in memory
+    let modifiedBytes;
+    try {
+      const zip = await JSZip.loadAsync(templateBytes);
+
+      // Get the main document XML
+      const docXml = await zip.file('word/document.xml').async('string');
+
+      // Replace all placeholders
+      const modifiedXml = replacePlaceholders(docXml, formData);
+
+      // Update the zip with modified XML
+      zip.file('word/document.xml', modifiedXml);
+
+      // Also check headers/footers for placeholders (some templates use them)
+      const headerFooterFiles = Object.keys(zip.files).filter(
+        (name) => name.match(/^word\/(header|footer)\d*\.xml$/)
+      );
+      for (const hfFile of headerFooterFiles) {
+        const hfXml = await zip.file(hfFile).async('string');
+        const modifiedHfXml = replacePlaceholders(hfXml, formData);
+        zip.file(hfFile, modifiedHfXml);
+      }
+
+      // Generate the modified .docx
+      modifiedBytes = await zip.generateAsync({ type: 'uint8array' });
+    } catch (e) {
+      console.error('Failed to process document:', e);
+      showStatus('Error processing document. Please try again.', 'error');
+      return;
+    }
+
+    // STEP 3: Download
+    downloadDocx(modifiedBytes, filename);
+    showStatus('Downloaded ' + filename, 'success');
   } catch (error) {
-    console.error('Error downloading:', error);
-    const raw = window.getFormData();
-    const name = raw.f_name || 'Unknown';
-    const filename = `Handl_Offer_Letter_${name.replace(/\s+/g, '_')}.docx`;
-    showStatus('To download: File > Save As > Download a Copy. Rename to "' + filename + '"', 'info');
+    console.error('Error:', error);
+    showStatus('Error: ' + error.message, 'error');
+  } finally {
+    const btn = document.getElementById('generateLetterBtn');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Generate & Download';
+    }
   }
 };
+
+// Alias both button handlers to the same function
+window.updateDocument = window.generateAndDownload;
+window.saveDocument = window.generateAndDownload;

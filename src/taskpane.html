@@ -6,6 +6,7 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <title>Handl Offer Letter Generator</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <link rel="stylesheet" href="taskpane.css" />
   </head>
   <body>
@@ -146,13 +147,10 @@
               </div>
             </div>
 
-            <!-- Action Buttons -->
+            <!-- Action Button -->
             <div class="form-actions">
-              <button type="button" id="saveAsBtn" class="btn btn-secondary">
-                Save As
-              </button>
               <button type="button" id="generateLetterBtn" class="btn btn-primary">
-                Generate Letter
+                Generate & Download
               </button>
             </div>
           </form>

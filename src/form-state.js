@@ -132,22 +132,12 @@ function initFormState() {
   if (generateBtn) {
     generateBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      if (typeof window.updateDocument === 'function') {
+      if (typeof window.generateAndDownload === 'function') {
+        window.generateAndDownload();
+      } else if (typeof window.updateDocument === 'function') {
         window.updateDocument();
       } else {
-        console.warn('window.updateDocument is not available');
-      }
-    });
-  }
-
-  const saveAsBtn = document.getElementById('saveAsBtn');
-  if (saveAsBtn) {
-    saveAsBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (typeof window.saveDocument === 'function') {
-        window.saveDocument();
-      } else {
-        console.warn('window.saveDocument is not available');
+        console.warn('No generate function available');
       }
     });
   }

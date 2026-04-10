@@ -38,7 +38,7 @@ previewState['__EXEMPT_CLASS__'] = '[EXEMPT]';
 previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
 
 let previewRefreshTimer = null;
-let previewEnabled = false; // Don't preview until template bytes are cached
+let previewRunning = false; // Lock to prevent concurrent Word.run calls
 
 /**
  * Compute what each placeholder slot should currently display, based on form state.
@@ -67,107 +67,150 @@ function getDesiredPreview() {
 }
 
 /**
- * Search for exact text in the document body and replace all occurrences.
+ * Batch search-and-replace: performs all changes in a SINGLE Word.run call
+ * with only 2 context.sync() round-trips (one to search, one to replace).
+ * @param {Array<{from: string, to: string}>} changes
  */
-async function searchAndReplace(searchText, replaceText) {
-  if (searchText === replaceText) return;
+async function batchSearchAndReplace(changes) {
+  if (changes.length === 0) return;
   try {
     await Word.run(async (context) => {
-      const results = context.document.body.search(searchText, {
-        matchCase: true,
-        matchWholeWord: false
-      });
-      results.load('text');
-      await context.sync();
-      for (let i = 0; i < results.items.length; i++) {
-        results.items[i].insertText(replaceText, Word.InsertLocation.replace);
+      // Queue ALL searches at once
+      var searchOps = [];
+      for (var i = 0; i < changes.length; i++) {
+        searchOps.push({
+          change: changes[i],
+          results: context.document.body.search(changes[i].from, {
+            matchCase: true,
+            matchWholeWord: false,
+            matchWildcards: false
+          })
+        });
       }
-      if (results.items.length > 0) {
+
+      // Load all results in one sync
+      for (var j = 0; j < searchOps.length; j++) {
+        searchOps[j].results.load('text');
+      }
+      await context.sync();
+
+      // Queue all replacements
+      var hasReplacements = false;
+      for (var k = 0; k < searchOps.length; k++) {
+        var items = searchOps[k].results.items;
+        console.log('Search "' + searchOps[k].change.from + '": ' + items.length + ' hit(s)');
+        for (var m = 0; m < items.length; m++) {
+          items[m].insertText(searchOps[k].change.to, "Replace");
+          hasReplacements = true;
+        }
+      }
+
+      // Apply all replacements in one sync
+      if (hasReplacements) {
         await context.sync();
       }
     });
   } catch (e) {
-    console.error('Search/replace failed:', searchText, '→', replaceText, e);
+    console.error('batchSearchAndReplace error:', e);
   }
 }
 
 /**
  * Refresh the live preview — compare desired values to current state, update changed ones.
+ * Uses a single batched Word.run call for all changes.
  */
 async function refreshPreview() {
   const desired = getDesiredPreview();
+  const changes = [];
 
-  // Handle EXEMPT eligibility FIRST (more specific phrase match)
+  // EXEMPT eligibility FIRST (more specific phrase match)
   if (previewState['__EXEMPT_ELIG__'] !== desired['__EXEMPT_ELIG__']) {
-    await searchAndReplace(previewState['__EXEMPT_ELIG__'], desired['__EXEMPT_ELIG__']);
-    previewState['__EXEMPT_ELIG__'] = desired['__EXEMPT_ELIG__'];
+    changes.push({ from: previewState['__EXEMPT_ELIG__'], to: desired['__EXEMPT_ELIG__'], key: '__EXEMPT_ELIG__' });
   }
-
-  // Handle EXEMPT classification (remaining [EXEMPT] occurrences)
+  // EXEMPT classification
   if (previewState['__EXEMPT_CLASS__'] !== desired['__EXEMPT_CLASS__']) {
-    await searchAndReplace(previewState['__EXEMPT_CLASS__'], desired['__EXEMPT_CLASS__']);
-    previewState['__EXEMPT_CLASS__'] = desired['__EXEMPT_CLASS__'];
+    changes.push({ from: previewState['__EXEMPT_CLASS__'], to: desired['__EXEMPT_CLASS__'], key: '__EXEMPT_CLASS__' });
   }
-
-  // Handle all simple placeholders
+  // All simple placeholders
   for (const p of SIMPLE_PLACEHOLDERS) {
     if (previewState[p] !== desired[p]) {
-      await searchAndReplace(previewState[p], desired[p]);
-      previewState[p] = desired[p];
+      changes.push({ from: previewState[p], to: desired[p], key: p });
     }
+  }
+
+  if (changes.length === 0) return;
+  console.log('Preview: updating ' + changes.length + ' field(s)');
+
+  await batchSearchAndReplace(changes);
+
+  // Update state after successful batch
+  for (var i = 0; i < changes.length; i++) {
+    previewState[changes[i].key] = changes[i].to;
   }
 }
 
 /**
  * Schedule a debounced preview refresh (500ms after last input).
+ * Lazily caches template bytes before the FIRST preview modification.
  */
 window.schedulePreviewRefresh = function () {
-  if (!previewEnabled) return; // Wait until template bytes are cached
   if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
-  previewRefreshTimer = setTimeout(() => {
-    refreshPreview().catch(e => console.error('Preview refresh error:', e));
+  previewRefreshTimer = setTimeout(async function () {
+    if (previewRunning) {
+      console.log('Preview already running, skipping');
+      return;
+    }
+    previewRunning = true;
+    try {
+      // Cache template bytes ONCE, before the first preview modification
+      if (!cachedTemplateBytes) {
+        console.log('Caching template bytes before first preview...');
+        cachedTemplateBytes = await getDocumentBytes();
+        console.log('Template bytes cached (' + cachedTemplateBytes.length + ' bytes)');
+      }
+      await refreshPreview();
+    } catch (e) {
+      console.error('Preview refresh error:', e);
+    } finally {
+      previewRunning = false;
+    }
   }, 500);
 };
 
 /**
  * Revert all preview replacements back to original placeholder text.
+ * Uses a single batched Word.run call.
  */
 async function revertDocument() {
-  // Revert simple placeholders
+  const changes = [];
   for (const p of SIMPLE_PLACEHOLDERS) {
     if (previewState[p] !== p) {
-      await searchAndReplace(previewState[p], p);
-      previewState[p] = p;
+      changes.push({ from: previewState[p], to: p, key: p });
     }
   }
-  // Revert EXEMPT classification
   if (previewState['__EXEMPT_CLASS__'] !== '[EXEMPT]') {
-    await searchAndReplace(previewState['__EXEMPT_CLASS__'], '[EXEMPT]');
-    previewState['__EXEMPT_CLASS__'] = '[EXEMPT]';
+    changes.push({ from: previewState['__EXEMPT_CLASS__'], to: '[EXEMPT]', key: '__EXEMPT_CLASS__' });
   }
-  // Revert EXEMPT eligibility
   if (previewState['__EXEMPT_ELIG__'] !== 'will [EXEMPT] be eligible') {
-    await searchAndReplace(previewState['__EXEMPT_ELIG__'], 'will [EXEMPT] be eligible');
-    previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
+    changes.push({ from: previewState['__EXEMPT_ELIG__'], to: 'will [EXEMPT] be eligible', key: '__EXEMPT_ELIG__' });
+  }
+
+  if (changes.length === 0) return;
+  console.log('Reverting ' + changes.length + ' placeholder(s)');
+
+  await batchSearchAndReplace(changes);
+
+  // Reset state
+  for (var i = 0; i < changes.length; i++) {
+    previewState[changes[i].key] = changes[i].to;
   }
 }
 
-Office.onReady(async (info) => {
+Office.onReady(function (info) {
   if (info.host === Office.HostType.Word) {
     console.log('Handl Offer Letter Generator ready');
     window.initFormState();
     window.initializeAddIn();
-
-    // Pre-cache template bytes BEFORE any preview modifications.
-    // This ensures we always have the original, unmodified template for JSZip generation.
-    try {
-      cachedTemplateBytes = await getDocumentBytes();
-      console.log('Template bytes pre-cached (' + cachedTemplateBytes.length + ' bytes)');
-    } catch (e) {
-      console.error('Failed to pre-cache template bytes:', e);
-    }
-    // Now safe to enable live preview
-    previewEnabled = true;
   }
 });
 

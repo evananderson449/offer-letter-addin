@@ -12,6 +12,11 @@
  * The template is NEVER modified. All work happens in memory.
  */
 
+// Cache template bytes so we only call getFileAsync once.
+// This fixes the "Error reading template" bug on 2nd+ generation —
+// Word Online doesn't reliably support rapid consecutive getFileAsync calls.
+let cachedTemplateBytes = null;
+
 Office.onReady((info) => {
   if (info.host === Office.HostType.Word) {
     console.log('Handl Offer Letter Generator ready');
@@ -227,10 +232,18 @@ window.generateAndDownload = async function () {
       btn.textContent = 'Generating...';
     }
 
-    // STEP 1: Read template bytes (document is NOT modified)
+    // STEP 1: Get template bytes — use cache if available, otherwise read once
     let templateBytes;
     try {
-      templateBytes = await getDocumentBytes();
+      if (cachedTemplateBytes) {
+        console.log('Using cached template bytes');
+        templateBytes = cachedTemplateBytes;
+      } else {
+        console.log('Reading template bytes (first time)');
+        templateBytes = await getDocumentBytes();
+        cachedTemplateBytes = templateBytes;
+        console.log('Template bytes cached (' + templateBytes.length + ' bytes)');
+      }
     } catch (e) {
       console.error('Failed to read template:', e);
       showStatus('Error reading template. Please try again.', 'error');

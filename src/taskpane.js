@@ -475,14 +475,22 @@ window.generateAndDownload = async function () {
     downloadDocx(modifiedBytes, filename);
     showStatus('Downloaded ' + filename, 'success');
 
-    // STEP 4: Reset form immediately (don't wait for document revert)
+    // STEP 4: Cancel any pending preview and block new ones during revert
+    if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
+    previewRunning = true;
+
+    // STEP 5: Reset form (this triggers events but preview is blocked above)
     if (typeof window.resetForm === 'function') {
       window.resetForm();
     }
 
-    // STEP 5: Revert document in background (don't block — takes ~3s via OOXML)
-    revertDocument().catch(function (e) {
+    // STEP 6: Revert document in background, then unblock preview
+    revertDocument().then(function () {
+      console.log('Document reverted to placeholders');
+      previewRunning = false;
+    }).catch(function (e) {
       console.error('Revert failed (download succeeded):', e);
+      previewRunning = false;
     });
   } catch (error) {
     console.error('Error:', error);

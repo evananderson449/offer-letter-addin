@@ -15,6 +15,10 @@
  * Office.onReady is the single entry point for the add-in
  * Initializes everything when Office.js is ready
  */
+// Debounce timer for live updates
+let _liveUpdateTimer = null;
+const LIVE_UPDATE_DELAY = 800; // ms after last keystroke
+
 Office.onReady((info) => {
   if (info.host === Office.HostType.Word) {
     console.log('Handl Offer Letter Generator ready');
@@ -24,8 +28,35 @@ Office.onReady((info) => {
 
     // Initialize add-in (Office.js validation)
     window.initializeAddIn();
+
+    // Attach live update listeners to all form inputs (debounced)
+    setupLiveUpdate();
   }
 });
+
+/**
+ * Attach debounced live update to all form fields
+ * Triggers updateDocument() 800ms after the user stops typing
+ */
+function setupLiveUpdate() {
+  const form = document.getElementById('offerForm');
+  if (!form) return;
+
+  // Listen on the entire form for input/change events (event delegation)
+  form.addEventListener('input', debouncedLiveUpdate);
+  form.addEventListener('change', debouncedLiveUpdate);
+}
+
+function debouncedLiveUpdate() {
+  // Only auto-update if all required fields are filled
+  if (!window.checkFormStatus()) return;
+
+  clearTimeout(_liveUpdateTimer);
+  _liveUpdateTimer = setTimeout(() => {
+    console.log('Live update triggered');
+    window.updateDocument();
+  }, LIVE_UPDATE_DELAY);
+}
 
 /**
  * Bridge function: Transform form data and call document-ops.js
@@ -84,25 +115,47 @@ window.updateDocument = async function() {
 };
 
 /**
- * Bridge function: Extract name from form and trigger save
- * This is the "Save As" button handler
- * Gets employee name from form and calls the save operation
+ * Bridge function: Save the document with proper naming
+ * In Word Online, we set the document title/properties and trigger a save,
+ * then instruct the user to use File > Save As or download from SharePoint.
  */
 window.saveDocument = async function() {
   try {
-    // Get raw form data from form-state.js
     const raw = window.getFormData();
     const name = raw.f_name || 'Unknown';
+    const filename = `Handl_Offer_Letter_${name.replace(/\s+/g, '_')}`;
 
-    // Call the core save operation (from document-ops.js)
-    await window._saveDocumentCore(name);
+    showStatus(`Saving document...`, 'info');
+
+    // Set the document title property to the desired filename
+    await Word.run(async (context) => {
+      const properties = context.document.properties;
+      properties.title = filename;
+      await context.sync();
+    });
+
+    // Trigger Office save
+    await new Promise((resolve, reject) => {
+      Office.context.document.saveAsync(function(result) {
+        if (result.status === Office.AsyncResultStatus.Succeeded) {
+          resolve();
+        } else {
+          reject(new Error(result.error ? result.error.message : 'Save failed'));
+        }
+      });
+    });
+
+    showStatus(`Document saved! To download as "${filename}.docx", use File > Save As > Download a Copy.`, 'success');
   } catch (error) {
-    console.error('Error in saveDocument bridge:', error);
-    const statusElement = document.getElementById('status-message');
-    if (statusElement) {
-      statusElement.textContent = `Error: ${error.message}`;
-      statusElement.className = 'status-message status-error';
-      statusElement.style.display = 'block';
+    console.error('Error saving document:', error);
+
+    // Fallback: try getFileAsync download
+    try {
+      const raw = window.getFormData();
+      const name = raw.f_name || 'Unknown';
+      await window._saveDocumentCore(name);
+    } catch (fallbackError) {
+      showStatus(`To save: use File > Save As > Download a Copy, then rename to "Handl_Offer_Letter_${(raw?.f_name || 'Name').replace(/\s+/g, '_')}.docx"`, 'info');
     }
   }
 };

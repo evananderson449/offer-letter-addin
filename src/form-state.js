@@ -148,6 +148,15 @@ function initFormState() {
   // Initial form status check
   checkFormStatus();
 
+  // Pre-cache template bytes on first form focus (user gesture, before preview modifies doc)
+  if (form) {
+    form.addEventListener('focusin', function () {
+      if (typeof window.preCacheTemplateBytes === 'function') {
+        window.preCacheTemplateBytes();
+      }
+    }, { once: true });
+  }
+
   // Live preview: trigger debounced preview refresh on any form input/change
   if (form) {
     form.addEventListener('input', () => {

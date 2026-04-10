@@ -190,6 +190,21 @@ async function revertDocument() {
   }
 }
 
+/**
+ * Pre-cache template bytes from a user gesture context (form focus).
+ * Called once before any preview modifications touch the document.
+ */
+window.preCacheTemplateBytes = async function () {
+  if (cachedTemplateBytes) return; // Already cached
+  try {
+    console.log('Pre-caching template bytes on first focus...');
+    cachedTemplateBytes = await getDocumentBytes();
+    console.log('Template pre-cached (' + cachedTemplateBytes.length + ' bytes)');
+  } catch (e) {
+    console.error('Pre-cache failed:', e);
+  }
+};
+
 Office.onReady(function (info) {
   if (info.host === Office.HostType.Word) {
     console.log('Handl Offer Letter Generator ready');
@@ -405,18 +420,15 @@ window.generateAndDownload = async function () {
       btn.textContent = 'Generating & Resetting...';
     }
 
-    // STEP 1: Get template bytes
-    // First time: revert any preview changes so we read clean template, then cache.
-    // Subsequent times: use cached bytes (original template is preserved).
+    // STEP 1: Get template bytes (pre-cached on first form focus)
     let templateBytes;
     try {
       if (cachedTemplateBytes) {
         console.log('Using cached template bytes');
         templateBytes = cachedTemplateBytes;
       } else {
-        console.log('First generate: reverting preview to read clean template...');
-        await revertDocument();
-        console.log('Reading template bytes...');
+        // Fallback: try reading now (we're in a button click = user gesture)
+        console.log('Cache miss — reading template bytes from button click...');
         templateBytes = await getDocumentBytes();
         cachedTemplateBytes = templateBytes;
         console.log('Template bytes cached (' + templateBytes.length + ' bytes)');

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>Handl Offer Letter Generator</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="taskpane.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="taskpane-header">
+        <h1>Handl Offer Letter Generator</h1>
+      </header>
+      <main class="taskpane-content">
+        <!-- Status message container -->
+        <div id="status-message" class="status-message" style="display:none;"></div>
+
+        <!-- Inlined form content from form.html -->
+        <div id="offer-form-wrapper" class="offer-form-container">
+          <!-- Status Pill -->
+          <div class="status-bar">
+            <span id="statusPill" class="status-pill status-draft">
+              <span class="status-dot"></span>
+              Draft
+            </span>
+          </div>
+
+          <form id="offerForm" class="offer-form">
+            <!-- Section 1: Employee Details -->
+            <div class="form-section">
+              <div class="section-header">
+                <h2>Employee Details</h2>
+              </div>
+              <div class="section-content">
+                <div class="form-group">
+                  <label for="f_name">Full Name *</label>
+                  <input type="text" id="f_name" class="form-input" required />
+                </div>
+
+                <div class="form-group">
+                  <label for="f_title">Title / Position *</label>
+                  <input type="text" id="f_title" class="form-input" required />
+                </div>
+
+                <div class="form-group">
+                  <label for="f_start_date">Start Date *</label>
+                  <input type="date" id="f_start_date" class="form-input" required />
+                </div>
+
+                <div class="form-group">
+                  <label for="f_exempt">FLSA Status</label>
+                  <select id="f_exempt" class="form-input">
+                    <option value="exempt">Exempt</option>
+                    <option value="non-exempt">Non-Exempt</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="f_supervisor">Supervisor *</label>
+                  <input type="text" id="f_supervisor" class="form-input" required />
+                </div>
+              </div>
+            </div>
+
+            <!-- Section 2: Compensation -->
+            <div class="form-section">
+              <div class="section-header">
+                <h2>Compensation</h2>
+              </div>
+              <div class="section-content">
+                <div class="form-group">
+                  <label for="f_salary">Annual Salary *</label>
+                  <input type="text" id="f_salary" class="form-input numeric-input" placeholder="0" required />
+                </div>
+
+                <div class="bonus-toggle-wrapper">
+                  <label class="toggle-label">
+                    <input type="checkbox" id="bonusToggle" class="toggle-checkbox" checked />
+                    <span class="toggle-slider"></span>
+                    Include Bonus
+                  </label>
+                </div>
+
+                <div id="bonusFields" class="bonus-fields-container">
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label for="f_bonus_pct_a">Bonus Min %</label>
+                      <input type="text" id="f_bonus_pct_a" class="form-input numeric-input" placeholder="0" />
+                    </div>
+                    <div class="form-group">
+                      <label for="f_bonus_pct_b">Bonus Max %</label>
+                      <input type="text" id="f_bonus_pct_b" class="form-input numeric-input" placeholder="0" />
+                    </div>
+                  </div>
+
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label for="f_bonus_dollar_a">Bonus Min $</label>
+                      <input type="text" id="f_bonus_dollar_a" class="form-input readonly-input" readonly />
+                    </div>
+                    <div class="form-group">
+                      <label for="f_bonus_dollar_b">Bonus Max $</label>
+                      <input type="text" id="f_bonus_dollar_b" class="form-input readonly-input" readonly />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Section 3: Equity -->
+            <div class="form-section">
+              <div class="section-header">
+                <h2>Equity</h2>
+              </div>
+              <div class="section-content">
+                <div class="form-group">
+                  <label for="f_shares_pct">Shares %</label>
+                  <input type="text" id="f_shares_pct" class="form-input numeric-input" placeholder="0.00" />
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="f_shares_num"># of Shares</label>
+                    <input type="text" id="f_shares_num" class="form-input readonly-input" readonly />
+                  </div>
+                  <div class="form-group">
+                    <label for="f_shares_val">Shares Value ($)</label>
+                    <input type="text" id="f_shares_val" class="form-input readonly-input" readonly />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Section 4: Offer Expiration -->
+            <div class="form-section">
+              <div class="section-header">
+                <h2>Offer Expiration</h2>
+              </div>
+              <div class="section-content">
+                <div class="form-group">
+                  <label for="f_expiration">Expiration Date *</label>
+                  <input type="date" id="f_expiration" class="form-input" required />
+                </div>
+              </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="form-actions">
+              <button type="button" id="saveAsBtn" class="btn btn-secondary">
+                Save As
+              </button>
+              <button type="button" id="generateLetterBtn" class="btn btn-primary">
+                Generate Letter
+              </button>
+            </div>
+          </form>
+        </div>
+      </main>
+    </div>
+
+    <!-- Load scripts in correct order -->
+    <script src="form-state.js"></script>
+    <script src="document-ops.js"></script>
+    <script src="taskpane.js"></script>
+  </body>
+</html>

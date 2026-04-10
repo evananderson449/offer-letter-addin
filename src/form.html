@@ -1,0 +1,440 @@
+<div id="offer-form-wrapper" class="offer-form-container">
+  <!-- Status Pill -->
+  <div class="status-bar">
+    <span id="statusPill" class="status-pill status-draft">
+      <span class="status-dot"></span>
+      Draft
+    </span>
+  </div>
+
+  <form id="offerForm" class="offer-form">
+    <!-- Section 1: Employee Details -->
+    <div class="form-section">
+      <div class="section-header">
+        <h2>Employee Details</h2>
+      </div>
+      <div class="section-content">
+        <div class="form-group">
+          <label for="f_name">Full Name *</label>
+          <input type="text" id="f_name" class="form-input" required />
+        </div>
+
+        <div class="form-group">
+          <label for="f_title">Title / Position *</label>
+          <input type="text" id="f_title" class="form-input" required />
+        </div>
+
+        <div class="form-group">
+          <label for="f_start_date">Start Date *</label>
+          <input type="date" id="f_start_date" class="form-input" required />
+        </div>
+
+        <div class="form-group">
+          <label for="f_exempt">FLSA Status</label>
+          <select id="f_exempt" class="form-input">
+            <option value="exempt">Exempt</option>
+            <option value="non-exempt">Non-Exempt</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="f_supervisor">Supervisor *</label>
+          <input type="text" id="f_supervisor" class="form-input" required />
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 2: Compensation -->
+    <div class="form-section">
+      <div class="section-header">
+        <h2>Compensation</h2>
+      </div>
+      <div class="section-content">
+        <div class="form-group">
+          <label for="f_salary">Annual Salary *</label>
+          <input type="text" id="f_salary" class="form-input numeric-input" placeholder="0" required />
+        </div>
+
+        <div class="bonus-toggle-wrapper">
+          <label class="toggle-label">
+            <input type="checkbox" id="bonusToggle" class="toggle-checkbox" checked />
+            <span class="toggle-slider"></span>
+            Include Bonus
+          </label>
+        </div>
+
+        <div id="bonusFields" class="bonus-fields-container">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="f_bonus_pct_a">Bonus Min %</label>
+              <input type="text" id="f_bonus_pct_a" class="form-input numeric-input" placeholder="0" />
+            </div>
+            <div class="form-group">
+              <label for="f_bonus_pct_b">Bonus Max %</label>
+              <input type="text" id="f_bonus_pct_b" class="form-input numeric-input" placeholder="0" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="f_bonus_dollar_a">Bonus Min $</label>
+              <input type="text" id="f_bonus_dollar_a" class="form-input readonly-input" readonly />
+            </div>
+            <div class="form-group">
+              <label for="f_bonus_dollar_b">Bonus Max $</label>
+              <input type="text" id="f_bonus_dollar_b" class="form-input readonly-input" readonly />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: Equity -->
+    <div class="form-section">
+      <div class="section-header">
+        <h2>Equity</h2>
+      </div>
+      <div class="section-content">
+        <div class="form-group">
+          <label for="f_shares_pct">Shares %</label>
+          <input type="text" id="f_shares_pct" class="form-input numeric-input" placeholder="0.00" />
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="f_shares_num"># of Shares</label>
+            <input type="text" id="f_shares_num" class="form-input readonly-input" readonly />
+          </div>
+          <div class="form-group">
+            <label for="f_shares_val">Shares Value ($)</label>
+            <input type="text" id="f_shares_val" class="form-input readonly-input" readonly />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 4: Offer Expiration -->
+    <div class="form-section">
+      <div class="section-header">
+        <h2>Offer Expiration</h2>
+      </div>
+      <div class="section-content">
+        <div class="form-group">
+          <label for="f_expiration">Expiration Date *</label>
+          <input type="date" id="f_expiration" class="form-input" required />
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="form-actions">
+      <button type="button" id="saveAsBtn" class="btn btn-secondary">
+        Save As
+      </button>
+      <button type="button" id="generateLetterBtn" class="btn btn-primary">
+        Generate Letter
+      </button>
+    </div>
+  </form>
+</div>
+
+<style>
+  * {
+    box-sizing: border-box;
+  }
+
+  .offer-form-container {
+    padding: 20px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    color: #333;
+  }
+
+  /* Status Bar */
+  .status-bar {
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+  }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .status-pill.status-draft {
+    background-color: #fff3cd;
+    color: #856404;
+  }
+
+  .status-pill.status-draft .status-dot {
+    background-color: #ff9800;
+  }
+
+  .status-pill.status-ready {
+    background-color: #d4edda;
+    color: #155724;
+  }
+
+  .status-pill.status-ready .status-dot {
+    background-color: #28a745;
+  }
+
+  /* Form Structure */
+  .offer-form {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .form-section {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: all 0.2s ease;
+  }
+
+  .form-section:hover {
+    box-shadow: 0 2px 8px rgba(27, 58, 92, 0.08);
+  }
+
+  .section-header {
+    background: linear-gradient(135deg, #f8fafb 0%, #ffffff 100%);
+    padding: 16px;
+    border-bottom: 1px solid #e0e0e0;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .section-header h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: #1b3a5c;
+    letter-spacing: 0.3px;
+  }
+
+  .section-content {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* Form Groups */
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #333;
+    letter-spacing: 0.2px;
+  }
+
+  /* Form Inputs */
+  .form-input {
+    padding: 10px 12px;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: inherit;
+    transition: all 0.2s ease;
+    background-color: #ffffff;
+  }
+
+  .form-input:focus {
+    outline: none;
+    border-color: #1b3a5c;
+    box-shadow: 0 0 0 3px rgba(27, 58, 92, 0.1);
+  }
+
+  .form-input.numeric-input {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .readonly-input {
+    background-color: #f5f5f5;
+    color: #666;
+    cursor: not-allowed;
+    border-color: #e0e0e0;
+  }
+
+  .readonly-input:focus {
+    box-shadow: none;
+    border-color: #e0e0e0;
+  }
+
+  /* Bonus Toggle */
+  .bonus-toggle-wrapper {
+    padding: 12px 0;
+  }
+
+  .toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 500;
+    font-size: 14px;
+    color: #333;
+  }
+
+  .toggle-checkbox {
+    display: none;
+  }
+
+  .toggle-slider {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    background-color: #ccc;
+    border-radius: 12px;
+    transition: background-color 0.3s ease;
+    flex-shrink: 0;
+  }
+
+  .toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background-color: white;
+    top: 2px;
+    left: 2px;
+    transition: left 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+
+  .toggle-checkbox:checked + .toggle-slider {
+    background-color: #28a745;
+  }
+
+  .toggle-checkbox:checked + .toggle-slider::before {
+    left: 22px;
+  }
+
+  /* Bonus Fields Container */
+  .bonus-fields-container {
+    padding: 16px;
+    background-color: #f9fafb;
+    border: 1px solid #e8e8e8;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-height: 500px;
+    opacity: 1;
+    transition: all 0.3s ease;
+    overflow: hidden;
+  }
+
+  .bonus-fields-container.hidden {
+    max-height: 0;
+    opacity: 0;
+    padding: 0;
+    margin: 0;
+    border: none;
+    overflow: hidden;
+  }
+
+  /* Form Actions */
+  .form-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    padding-top: 20px;
+    border-top: 1px solid #e0e0e0;
+    margin-top: 12px;
+  }
+
+  /* Buttons */
+  .btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+
+  .btn:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(27, 58, 92, 0.2);
+  }
+
+  .btn-primary {
+    background-color: #1b3a5c;
+    color: white;
+  }
+
+  .btn-primary:hover {
+    background-color: #142b45;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(27, 58, 92, 0.25);
+  }
+
+  .btn-primary:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(27, 58, 92, 0.2);
+  }
+
+  .btn-secondary {
+    background-color: white;
+    color: #1b3a5c;
+    border: 2px solid #1b3a5c;
+  }
+
+  .btn-secondary:hover {
+    background-color: #f5f5f5;
+    transform: translateY(-1px);
+  }
+
+  .btn-secondary:active {
+    transform: translateY(0);
+  }
+
+  /* Responsive Design */
+  @media (max-width: 600px) {
+    .form-row {
+      grid-template-columns: 1fr;
+    }
+
+    .form-actions {
+      flex-direction: column-reverse;
+    }
+
+    .btn {
+      width: 100%;
+    }
+  }
+</style>

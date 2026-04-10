@@ -38,6 +38,7 @@ previewState['__EXEMPT_CLASS__'] = '[EXEMPT]';
 previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
 
 let previewRefreshTimer = null;
+let previewEnabled = false; // Don't preview until template bytes are cached
 
 /**
  * Compute what each placeholder slot should currently display, based on form state.
@@ -121,6 +122,7 @@ async function refreshPreview() {
  * Schedule a debounced preview refresh (500ms after last input).
  */
 window.schedulePreviewRefresh = function () {
+  if (!previewEnabled) return; // Wait until template bytes are cached
   if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
   previewRefreshTimer = setTimeout(() => {
     refreshPreview().catch(e => console.error('Preview refresh error:', e));
@@ -150,11 +152,22 @@ async function revertDocument() {
   }
 }
 
-Office.onReady((info) => {
+Office.onReady(async (info) => {
   if (info.host === Office.HostType.Word) {
     console.log('Handl Offer Letter Generator ready');
     window.initFormState();
     window.initializeAddIn();
+
+    // Pre-cache template bytes BEFORE any preview modifications.
+    // This ensures we always have the original, unmodified template for JSZip generation.
+    try {
+      cachedTemplateBytes = await getDocumentBytes();
+      console.log('Template bytes pre-cached (' + cachedTemplateBytes.length + ' bytes)');
+    } catch (e) {
+      console.error('Failed to pre-cache template bytes:', e);
+    }
+    // Now safe to enable live preview
+    previewEnabled = true;
   }
 });
 

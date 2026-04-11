@@ -17,10 +17,14 @@
 // Word Online doesn't reliably support rapid consecutive getFileAsync calls.
 let cachedTemplateBytes = null;
 
+// Cache the original body OOXML so we can restore it wholesale on revert.
+// This avoids the race condition of field-by-field replacement during form reset.
+let cachedBodyOoxml = null;
+
 // ===== LIVE PREVIEW SYSTEM =====
 // Tracks what's currently displayed in the document for each placeholder.
 // On field change: search for current text, replace with form value.
-// On generate+reset: revert all replacements back to original placeholders.
+// On generate+reset: restore cached original OOXML wholesale.
 
 const SIMPLE_PLACEHOLDERS = [
   '[NAME]', '[TITLE]', '[START DATE]', '[SUPERVISOR]', '[SALARY]',
@@ -39,6 +43,7 @@ previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
 
 let previewRefreshTimer = null;
 let previewRunning = false; // Lock to prevent concurrent Word.run calls
+let revertInProgress = false; // Hard block: suppresses ALL preview scheduling during revert
 
 /**
  * Compute what each placeholder slot should currently display, based on form state.
@@ -140,8 +145,14 @@ async function refreshPreview() {
  * re-schedule instead of silently dropping the update.
  */
 window.schedulePreviewRefresh = function () {
+  // Hard block: suppress ALL preview scheduling during revert sequence
+  if (revertInProgress) {
+    console.log('Preview suppressed — revert in progress');
+    return;
+  }
   if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
   previewRefreshTimer = setTimeout(async function () {
+    if (revertInProgress) return; // Re-check after debounce
     if (previewRunning) {
       // Word.run still in progress — re-schedule in 1s instead of dropping
       console.log('Preview busy, re-scheduling...');
@@ -162,46 +173,84 @@ window.schedulePreviewRefresh = function () {
 };
 
 /**
- * Revert all preview replacements back to original placeholder text.
- * Uses a single batched Word.run call.
+ * Revert document to original template state by restoring cached body OOXML wholesale.
+ * This avoids the race condition of field-by-field replacement during form reset.
+ * Falls back to field-by-field if cached OOXML is not available.
  */
 async function revertDocument() {
-  const changes = [];
-  for (const p of SIMPLE_PLACEHOLDERS) {
-    if (previewState[p] !== p) {
-      changes.push({ from: previewState[p], to: p, key: p });
+  if (cachedBodyOoxml) {
+    // WHOLESALE RESTORE — single insertOoxml call, no field-by-field matching needed
+    console.log('Reverting document via cached OOXML restore...');
+    try {
+      await Word.run(async (context) => {
+        context.document.body.insertOoxml(cachedBodyOoxml, "Replace");
+        await context.sync();
+      });
+      console.log('Document restored to original template');
+    } catch (e) {
+      console.error('Wholesale OOXML restore failed:', e);
+    }
+  } else {
+    // Fallback: field-by-field replacement (less reliable)
+    console.warn('No cached OOXML — falling back to field-by-field revert');
+    const changes = [];
+    for (const p of SIMPLE_PLACEHOLDERS) {
+      if (previewState[p] !== p) {
+        changes.push({ from: previewState[p], to: p, key: p });
+      }
+    }
+    if (previewState['__EXEMPT_CLASS__'] !== '[EXEMPT]') {
+      changes.push({ from: previewState['__EXEMPT_CLASS__'], to: '[EXEMPT]', key: '__EXEMPT_CLASS__' });
+    }
+    if (previewState['__EXEMPT_ELIG__'] !== 'will [EXEMPT] be eligible') {
+      changes.push({ from: previewState['__EXEMPT_ELIG__'], to: 'will [EXEMPT] be eligible', key: '__EXEMPT_ELIG__' });
+    }
+    if (changes.length > 0) {
+      console.log('Reverting ' + changes.length + ' placeholder(s) field-by-field');
+      await replaceInDocument(changes);
     }
   }
-  if (previewState['__EXEMPT_CLASS__'] !== '[EXEMPT]') {
-    changes.push({ from: previewState['__EXEMPT_CLASS__'], to: '[EXEMPT]', key: '__EXEMPT_CLASS__' });
-  }
-  if (previewState['__EXEMPT_ELIG__'] !== 'will [EXEMPT] be eligible') {
-    changes.push({ from: previewState['__EXEMPT_ELIG__'], to: 'will [EXEMPT] be eligible', key: '__EXEMPT_ELIG__' });
-  }
 
-  if (changes.length === 0) return;
-  console.log('Reverting ' + changes.length + ' placeholder(s)');
-
-  await replaceInDocument(changes);
-
-  // Reset state
-  for (var i = 0; i < changes.length; i++) {
-    previewState[changes[i].key] = changes[i].to;
+  // Reset previewState to original placeholders regardless of method
+  for (const p of SIMPLE_PLACEHOLDERS) {
+    previewState[p] = p;
   }
+  previewState['__EXEMPT_CLASS__'] = '[EXEMPT]';
+  previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
 }
 
 /**
- * Pre-cache template bytes from a user gesture context (form focus).
+ * Pre-cache template bytes AND body OOXML from a user gesture context (form focus).
  * Called once before any preview modifications touch the document.
+ * The body OOXML is used for wholesale restore on revert.
  */
 window.preCacheTemplateBytes = async function () {
-  if (cachedTemplateBytes) return; // Already cached
-  try {
-    console.log('Pre-caching template bytes on first focus...');
-    cachedTemplateBytes = await getDocumentBytes();
-    console.log('Template pre-cached (' + cachedTemplateBytes.length + ' bytes)');
-  } catch (e) {
-    console.error('Pre-cache failed:', e);
+  if (cachedTemplateBytes && cachedBodyOoxml) return; // Already cached
+
+  // Cache template bytes for download generation
+  if (!cachedTemplateBytes) {
+    try {
+      console.log('Pre-caching template bytes on first focus...');
+      cachedTemplateBytes = await getDocumentBytes();
+      console.log('Template pre-cached (' + cachedTemplateBytes.length + ' bytes)');
+    } catch (e) {
+      console.error('Pre-cache template bytes failed:', e);
+    }
+  }
+
+  // Cache body OOXML for wholesale revert
+  if (!cachedBodyOoxml) {
+    try {
+      console.log('Pre-caching body OOXML for revert...');
+      await Word.run(async (context) => {
+        var ooxmlResult = context.document.body.getOoxml();
+        await context.sync();
+        cachedBodyOoxml = ooxmlResult.value;
+        console.log('Body OOXML pre-cached (' + cachedBodyOoxml.length + ' chars)');
+      });
+    } catch (e) {
+      console.error('Pre-cache body OOXML failed:', e);
+    }
   }
 };
 
@@ -475,22 +524,28 @@ window.generateAndDownload = async function () {
     downloadDocx(modifiedBytes, filename);
     showStatus('Downloaded ' + filename, 'success');
 
-    // STEP 4: Cancel any pending preview and block new ones during revert
-    if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
+    // STEP 4: Hard-block ALL preview scheduling during revert sequence
+    revertInProgress = true;
+    if (previewRefreshTimer) {
+      clearTimeout(previewRefreshTimer);
+      previewRefreshTimer = null;
+    }
     previewRunning = true;
 
-    // STEP 5: Reset form (this triggers events but preview is blocked above)
+    // STEP 5: Reset form (triggers input/change events, but revertInProgress suppresses them)
     if (typeof window.resetForm === 'function') {
       window.resetForm();
     }
 
-    // STEP 6: Revert document in background, then unblock preview
+    // STEP 6: Revert document (wholesale OOXML restore), then unblock preview
     revertDocument().then(function () {
       console.log('Document reverted to placeholders');
       previewRunning = false;
+      revertInProgress = false;
     }).catch(function (e) {
       console.error('Revert failed (download succeeded):', e);
       previewRunning = false;
+      revertInProgress = false;
     });
   } catch (error) {
     console.error('Error:', error);

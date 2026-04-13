@@ -259,6 +259,14 @@ Office.onReady(function (info) {
     console.log('Handl Offer Letter Generator ready');
     window.initFormState();
     window.initializeAddIn();
+
+    // Wire up content control test button (temporary)
+    var ccBtn = document.getElementById('ccTestBtn');
+    if (ccBtn) {
+      ccBtn.addEventListener('click', function () {
+        runContentControlTest();
+      });
+    }
   }
 });
 
@@ -562,3 +570,76 @@ window.generateAndDownload = async function () {
 // Alias both button handlers to the same function
 window.updateDocument = window.generateAndDownload;
 window.saveDocument = window.generateAndDownload;
+
+// ===== TEMPORARY: Content Control API Test =====
+async function runContentControlTest() {
+  var el = document.getElementById('ccTestResult');
+  var btn = document.getElementById('ccTestBtn');
+  if (btn) btn.disabled = true;
+  var log = [];
+  function out(msg) {
+    log.push(msg);
+    console.log('[CC-TEST] ' + msg);
+    if (el) el.textContent = log.join('\n');
+  }
+
+  try {
+    var tagName = 'cc_test_tag';
+
+    // Step 1: Wrap first paragraph in a content control
+    out('Step 1: Creating content control...');
+    await Word.run(function (context) {
+      var para = context.document.body.paragraphs.getFirst();
+      var cc = para.insertContentControl();
+      cc.tag = tagName;
+      cc.title = 'Test CC';
+      return context.sync();
+    });
+    out('  OK - created');
+
+    // Step 2: Find by tag
+    out('Step 2: Finding by tag...');
+    await Word.run(function (context) {
+      var ccs = context.document.contentControls.getByTag(tagName);
+      context.load(ccs, 'items');
+      return context.sync().then(function () {
+        out('  OK - found ' + ccs.items.length + ' control(s)');
+      });
+    });
+
+    // Step 3: Update text and measure latency
+    out('Step 3: Updating text...');
+    var t0 = performance.now();
+    await Word.run(function (context) {
+      var ccs = context.document.contentControls.getByTag(tagName);
+      context.load(ccs, 'items');
+      return context.sync().then(function () {
+        if (ccs.items.length > 0) {
+          ccs.items[0].insertText('TEST_VALUE', 'Replace');
+          return context.sync();
+        }
+      });
+    });
+    var ms = Math.round(performance.now() - t0);
+    out('  OK - updated in ' + ms + 'ms');
+
+    // Step 4: Clean up
+    out('Step 4: Cleaning up...');
+    await Word.run(function (context) {
+      var ccs = context.document.contentControls.getByTag(tagName);
+      context.load(ccs, 'items');
+      return context.sync().then(function () {
+        if (ccs.items.length > 0) {
+          ccs.items[0].delete(false);
+          return context.sync();
+        }
+      });
+    });
+    out('  OK - removed');
+
+    out('\nPASSED (' + ms + 'ms update latency)');
+  } catch (e) {
+    out('\nFAILED: ' + e.message);
+  }
+  if (btn) btn.disabled = false;
+}

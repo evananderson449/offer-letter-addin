@@ -473,9 +473,18 @@ function deleteBonusParagraph(xml) {
  * 4. Generate the modified .docx and trigger browser download
  */
 window.generateAndDownload = async function () {
+  // IMMEDIATELY block all preview scheduling to prevent focusout-triggered
+  // Word.run from racing with the revert's Word.run (concurrent = deadlock)
+  revertInProgress = true;
+  if (previewRefreshTimer) {
+    clearTimeout(previewRefreshTimer);
+    previewRefreshTimer = null;
+  }
+
   try {
     if (!window.checkFormStatus()) {
       showStatus('Please fill in all required fields.', 'error');
+      revertInProgress = false;
       return;
     }
 
@@ -544,12 +553,8 @@ window.generateAndDownload = async function () {
     downloadDocx(modifiedBytes, filename);
     showStatus('Downloaded ' + filename, 'success');
 
-    // STEP 4: Hard-block ALL preview scheduling during revert sequence
-    revertInProgress = true;
-    if (previewRefreshTimer) {
-      clearTimeout(previewRefreshTimer);
-      previewRefreshTimer = null;
-    }
+    // STEP 4: Ensure preview lock is held for the revert Word.run
+    // (revertInProgress was already set at function entry to block focusout races)
     previewRunning = true;
 
     // STEP 5: Reset form (triggers input/change events, but revertInProgress suppresses them)
@@ -557,20 +562,20 @@ window.generateAndDownload = async function () {
       window.resetForm();
     }
 
-    // STEP 6: Revert document (wholesale OOXML restore), then unblock preview
-    revertDocument().then(function () {
+    // STEP 6: Revert document (wholesale OOXML restore), then unblock
+    try {
+      await revertDocument();
       console.log('Document reverted to placeholders');
-      previewRunning = false;
-      revertInProgress = false;
-    }).catch(function (e) {
+    } catch (e) {
       console.error('Revert failed (download succeeded):', e);
-      previewRunning = false;
-      revertInProgress = false;
-    });
+    }
   } catch (error) {
     console.error('Error:', error);
     showStatus('Error: ' + error.message, 'error');
   } finally {
+    // Always clear flags and re-enable button, even if revert failed
+    previewRunning = false;
+    revertInProgress = false;
     const btn = document.getElementById('generateLetterBtn');
     if (btn) {
       btn.disabled = false;

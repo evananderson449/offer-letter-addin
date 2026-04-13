@@ -129,6 +129,23 @@ async function refreshPreview() {
   }
 
   if (changes.length === 0) return;
+
+  // Lazy-cache body OOXML on first preview (before any modifications).
+  // Done here under the previewRunning lock to avoid concurrent Word.run.
+  if (!cachedBodyOoxml) {
+    try {
+      console.log('Lazy-caching body OOXML before first preview...');
+      await Word.run(async (context) => {
+        var ooxmlResult = context.document.body.getOoxml();
+        await context.sync();
+        cachedBodyOoxml = ooxmlResult.value;
+        console.log('Body OOXML cached (' + cachedBodyOoxml.length + ' chars)');
+      });
+    } catch (e) {
+      console.warn('OOXML cache failed (field-by-field revert fallback available):', e);
+    }
+  }
+
   console.log('Preview: updating ' + changes.length + ' field(s)');
 
   await replaceInDocument(changes);
@@ -220,37 +237,20 @@ async function revertDocument() {
 }
 
 /**
- * Pre-cache template bytes AND body OOXML from a user gesture context (form focus).
+ * Pre-cache template bytes from a user gesture context (form focus).
  * Called once before any preview modifications touch the document.
- * The body OOXML is used for wholesale restore on revert.
+ * NOTE: Body OOXML caching is done lazily in refreshPreview() under
+ * the previewRunning lock to avoid concurrent Word.run deadlocks.
  */
 window.preCacheTemplateBytes = async function () {
-  if (cachedTemplateBytes && cachedBodyOoxml) return; // Already cached
+  if (cachedTemplateBytes) return; // Already cached
 
-  // Cache template bytes for download generation
-  if (!cachedTemplateBytes) {
-    try {
-      console.log('Pre-caching template bytes on first focus...');
-      cachedTemplateBytes = await getDocumentBytes();
-      console.log('Template pre-cached (' + cachedTemplateBytes.length + ' bytes)');
-    } catch (e) {
-      console.error('Pre-cache template bytes failed:', e);
-    }
-  }
-
-  // Cache body OOXML for wholesale revert
-  if (!cachedBodyOoxml) {
-    try {
-      console.log('Pre-caching body OOXML for revert...');
-      await Word.run(async (context) => {
-        var ooxmlResult = context.document.body.getOoxml();
-        await context.sync();
-        cachedBodyOoxml = ooxmlResult.value;
-        console.log('Body OOXML pre-cached (' + cachedBodyOoxml.length + ' chars)');
-      });
-    } catch (e) {
-      console.error('Pre-cache body OOXML failed:', e);
-    }
+  try {
+    console.log('Pre-caching template bytes on first focus...');
+    cachedTemplateBytes = await getDocumentBytes();
+    console.log('Template pre-cached (' + cachedTemplateBytes.length + ' bytes)');
+  } catch (e) {
+    console.error('Pre-cache template bytes failed:', e);
   }
 };
 

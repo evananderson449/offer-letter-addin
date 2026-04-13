@@ -571,7 +571,7 @@ window.generateAndDownload = async function () {
 window.updateDocument = window.generateAndDownload;
 window.saveDocument = window.generateAndDownload;
 
-// ===== TEMPORARY: Content Control API Test =====
+// ===== TEMPORARY: Content Control API Test (WordApi 1.1 only) =====
 async function runContentControlTest() {
   var el = document.getElementById('ccTestResult');
   var btn = document.getElementById('ccTestBtn');
@@ -586,14 +586,19 @@ async function runContentControlTest() {
   try {
     var tagName = 'cc_test_tag';
 
-    // Step 1: Wrap first paragraph in a content control
+    // Step 1: Load paragraphs, wrap first one in a content control
     out('Step 1: Creating content control...');
     await Word.run(function (context) {
-      var para = context.document.body.paragraphs.getFirst();
-      var cc = para.insertContentControl();
-      cc.tag = tagName;
-      cc.title = 'Test CC';
-      return context.sync();
+      var paras = context.document.body.paragraphs;
+      paras.load('items');
+      return context.sync().then(function () {
+        out('  Found ' + paras.items.length + ' paragraph(s)');
+        if (paras.items.length === 0) throw new Error('No paragraphs');
+        var cc = paras.items[0].insertContentControl();
+        cc.tag = tagName;
+        cc.title = 'Test CC';
+        return context.sync();
+      });
     });
     out('  OK - created');
 
@@ -601,7 +606,7 @@ async function runContentControlTest() {
     out('Step 2: Finding by tag...');
     await Word.run(function (context) {
       var ccs = context.document.contentControls.getByTag(tagName);
-      context.load(ccs, 'items');
+      ccs.load('tag');
       return context.sync().then(function () {
         out('  OK - found ' + ccs.items.length + ' control(s)');
       });
@@ -612,7 +617,7 @@ async function runContentControlTest() {
     var t0 = performance.now();
     await Word.run(function (context) {
       var ccs = context.document.contentControls.getByTag(tagName);
-      context.load(ccs, 'items');
+      ccs.load('tag');
       return context.sync().then(function () {
         if (ccs.items.length > 0) {
           ccs.items[0].insertText('TEST_VALUE', 'Replace');
@@ -623,11 +628,11 @@ async function runContentControlTest() {
     var ms = Math.round(performance.now() - t0);
     out('  OK - updated in ' + ms + 'ms');
 
-    // Step 4: Clean up
+    // Step 4: Clean up — delete CC, keep text
     out('Step 4: Cleaning up...');
     await Word.run(function (context) {
       var ccs = context.document.contentControls.getByTag(tagName);
-      context.load(ccs, 'items');
+      ccs.load('tag');
       return context.sync().then(function () {
         if (ccs.items.length > 0) {
           ccs.items[0].delete(false);
@@ -639,7 +644,8 @@ async function runContentControlTest() {
 
     out('\nPASSED (' + ms + 'ms update latency)');
   } catch (e) {
-    out('\nFAILED: ' + e.message);
+    out('\nFAILED: ' + (e.message || e));
+    if (e.debugInfo) out('Debug: ' + JSON.stringify(e.debugInfo));
   }
   if (btn) btn.disabled = false;
 }

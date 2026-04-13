@@ -157,16 +157,23 @@ function initFormState() {
     }, { once: true });
   }
 
-  // Live preview: trigger debounced preview refresh on any form input/change
+  // Live preview: trigger preview refresh when user leaves a field (blur)
+  // or changes a select/checkbox (change). Using blur instead of input avoids
+  // mid-typing interruptions and the OOXML round-trip only fires once per field.
   if (form) {
-    form.addEventListener('input', () => {
-      if (typeof window.schedulePreviewRefresh === 'function') {
-        window.schedulePreviewRefresh();
+    form.addEventListener('focusout', function (e) {
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) {
+        if (typeof window.schedulePreviewRefresh === 'function') {
+          window.schedulePreviewRefresh();
+        }
       }
     });
-    form.addEventListener('change', () => {
-      if (typeof window.schedulePreviewRefresh === 'function') {
-        window.schedulePreviewRefresh();
+    form.addEventListener('change', function (e) {
+      // Immediate update for selects and checkboxes (no typing involved)
+      if (e.target && (e.target.tagName === 'SELECT' || e.target.type === 'checkbox')) {
+        if (typeof window.schedulePreviewRefresh === 'function') {
+          window.schedulePreviewRefresh();
+        }
       }
     });
   }

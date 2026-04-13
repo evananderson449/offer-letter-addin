@@ -79,6 +79,16 @@ function getDesiredPreview() {
  */
 async function replaceInDocument(changes) {
   if (changes.length === 0) return;
+
+  // Save current focus so we can restore it after insertOoxml steals it
+  var savedEl = document.activeElement;
+  var savedStart = null;
+  var savedEnd = null;
+  if (savedEl && typeof savedEl.selectionStart === 'number') {
+    savedStart = savedEl.selectionStart;
+    savedEnd = savedEl.selectionEnd;
+  }
+
   try {
     await Word.run(async (context) => {
       // Get the body OOXML (contains all text + formatting)
@@ -102,6 +112,16 @@ async function replaceInDocument(changes) {
     });
   } catch (e) {
     console.error('replaceInDocument error:', e);
+  }
+
+  // Restore focus to the form field that was active before insertOoxml stole it
+  if (savedEl && savedEl.closest && savedEl.closest('#offerForm')) {
+    try {
+      savedEl.focus();
+      if (savedStart !== null && typeof savedEl.setSelectionRange === 'function') {
+        savedEl.setSelectionRange(savedStart, savedEnd);
+      }
+    } catch (e) { /* ignore */ }
   }
 }
 
@@ -157,9 +177,9 @@ async function refreshPreview() {
 }
 
 /**
- * Schedule a debounced preview refresh (500ms after last input).
- * If a previous refresh is still running (Word.run in progress),
- * re-schedule instead of silently dropping the update.
+ * Schedule a preview refresh with short debounce (100ms).
+ * Triggered on field blur (not every keystroke), so the debounce is just
+ * to coalesce rapid-fire blur/focus events when tabbing between fields.
  */
 window.schedulePreviewRefresh = function () {
   // Hard block: suppress ALL preview scheduling during revert sequence
@@ -186,7 +206,7 @@ window.schedulePreviewRefresh = function () {
     } finally {
       previewRunning = false;
     }
-  }, 500);
+  }, 100);
 };
 
 /**
@@ -259,14 +279,6 @@ Office.onReady(function (info) {
     console.log('Handl Offer Letter Generator ready');
     window.initFormState();
     window.initializeAddIn();
-
-    // Wire up content control test button (temporary)
-    var ccBtn = document.getElementById('ccTestBtn');
-    if (ccBtn) {
-      ccBtn.addEventListener('click', function () {
-        runContentControlTest();
-      });
-    }
   }
 });
 
@@ -570,82 +582,3 @@ window.generateAndDownload = async function () {
 // Alias both button handlers to the same function
 window.updateDocument = window.generateAndDownload;
 window.saveDocument = window.generateAndDownload;
-
-// ===== TEMPORARY: Content Control API Test (WordApi 1.1 only) =====
-async function runContentControlTest() {
-  var el = document.getElementById('ccTestResult');
-  var btn = document.getElementById('ccTestBtn');
-  if (btn) btn.disabled = true;
-  var log = [];
-  function out(msg) {
-    log.push(msg);
-    console.log('[CC-TEST] ' + msg);
-    if (el) el.textContent = log.join('\n');
-  }
-
-  try {
-    var tagName = 'cc_test_tag';
-
-    // Step 1: Load paragraphs, wrap first one in a content control
-    out('Step 1: Creating content control...');
-    await Word.run(function (context) {
-      var paras = context.document.body.paragraphs;
-      paras.load('items');
-      return context.sync().then(function () {
-        out('  Found ' + paras.items.length + ' paragraph(s)');
-        if (paras.items.length === 0) throw new Error('No paragraphs');
-        var cc = paras.items[0].insertContentControl();
-        cc.tag = tagName;
-        cc.title = 'Test CC';
-        return context.sync();
-      });
-    });
-    out('  OK - created');
-
-    // Step 2: Find by tag
-    out('Step 2: Finding by tag...');
-    await Word.run(function (context) {
-      var ccs = context.document.contentControls.getByTag(tagName);
-      ccs.load('tag');
-      return context.sync().then(function () {
-        out('  OK - found ' + ccs.items.length + ' control(s)');
-      });
-    });
-
-    // Step 3: Update text and measure latency
-    out('Step 3: Updating text...');
-    var t0 = performance.now();
-    await Word.run(function (context) {
-      var ccs = context.document.contentControls.getByTag(tagName);
-      ccs.load('tag');
-      return context.sync().then(function () {
-        if (ccs.items.length > 0) {
-          ccs.items[0].insertText('TEST_VALUE', 'Replace');
-          return context.sync();
-        }
-      });
-    });
-    var ms = Math.round(performance.now() - t0);
-    out('  OK - updated in ' + ms + 'ms');
-
-    // Step 4: Clean up — delete CC, keep text
-    out('Step 4: Cleaning up...');
-    await Word.run(function (context) {
-      var ccs = context.document.contentControls.getByTag(tagName);
-      ccs.load('tag');
-      return context.sync().then(function () {
-        if (ccs.items.length > 0) {
-          ccs.items[0].delete(false);
-          return context.sync();
-        }
-      });
-    });
-    out('  OK - removed');
-
-    out('\nPASSED (' + ms + 'ms update latency)');
-  } catch (e) {
-    out('\nFAILED: ' + (e.message || e));
-    if (e.debugInfo) out('Debug: ' + JSON.stringify(e.debugInfo));
-  }
-  if (btn) btn.disabled = false;
-}

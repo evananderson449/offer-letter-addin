@@ -4,7 +4,7 @@
  * Status display and initialization only — all document manipulation
  * is handled in-memory by taskpane.js using JSZip.
  */
-console.log('[document-ops.js] v2.1 loaded');
+console.log('[document-ops.js] v2.2 loaded');
 
 /**
  * Display status message to user

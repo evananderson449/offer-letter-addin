@@ -2,7 +2,7 @@
  * Form State Management for Offer Letter Generator
  * Handles form initialization, state tracking, validation, and auto-calculations
  */
-console.log('[form-state.js] v2.1 loaded');
+console.log('[form-state.js] v2.2 loaded');
 
 // Constants
 const TOTAL_SHARES = 21231806;
@@ -149,14 +149,8 @@ function initFormState() {
   // Initial form status check
   checkFormStatus();
 
-  // Pre-cache template bytes on first form focus (user gesture, before preview modifies doc)
-  if (form) {
-    form.addEventListener('focusin', function () {
-      if (typeof window.preCacheTemplateBytes === 'function') {
-        window.preCacheTemplateBytes();
-      }
-    }, { once: true });
-  }
+  // NOTE: Pre-caching on focusin was removed — getFileAsync hangs from focusin
+  // in Word Online. Template bytes are now cached in generateAndDownload (button click).
 
   // Live preview: trigger on focusout (when leaving a field) AND input (while typing).
   // focusout fires once per field (clean), input fires per keystroke (responsive).

@@ -11,7 +11,7 @@
  *
  * The template is NEVER modified. All work happens in memory.
  */
-console.log('[taskpane.js] v2.3 loaded');
+console.log('[taskpane.js] v3.0 loaded');
 
 // Cache template bytes so we only call getFileAsync once.
 // This fixes the "Error reading template" bug on 2nd+ generation —
@@ -273,15 +273,17 @@ window.preCacheTemplateBytes = async function () {
   console.log('preCacheTemplateBytes called (no-op — caching happens on demand)');
 };
 
-// Guard against double initialization (Word Online loads scripts twice)
-let _initialized = false;
+// Guard against double initialization (Word Online loads scripts twice in separate JS contexts).
+// A simple variable guard fails because each context has its own variable.
+// DOM-based guard works because both contexts share the same DOM.
 Office.onReady(function (info) {
-  console.log('[Office.onReady] host=' + info.host + ', platform=' + info.platform + ', already=' + _initialized);
-  if (_initialized) {
-    console.log('Skipping duplicate initialization');
+  var alreadyInit = document.body.getAttribute('data-handl-initialized') === 'true';
+  console.log('[Office.onReady] host=' + info.host + ', platform=' + info.platform + ', already=' + alreadyInit);
+  if (alreadyInit) {
+    console.log('Skipping duplicate initialization (DOM guard)');
     return;
   }
-  _initialized = true;
+  document.body.setAttribute('data-handl-initialized', 'true');
   if (info.host === Office.HostType.Word) {
     console.log('Handl Offer Letter Generator ready — initializing form...');
     window.initFormState();
@@ -603,3 +605,94 @@ window.generateAndDownload = async function () {
 // Alias both button handlers to the same function
 window.updateDocument = window.generateAndDownload;
 window.saveDocument = window.generateAndDownload;
+
+// ===== DIAGNOSTIC BUTTONS =====
+// These test which Word.run APIs actually work in the current Word Online environment.
+// Each runs a minimal Word.run call with a 6-second timeout via a button click (valid user gesture).
+
+function diagLog(msg) {
+  var el = document.getElementById('diag-results');
+  if (el) {
+    var ts = new Date().toLocaleTimeString();
+    el.textContent += '[' + ts + '] ' + msg + '\n';
+    el.scrollTop = el.scrollHeight;
+  }
+  console.log('[DIAG] ' + msg);
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  var btnText = document.getElementById('diagBodyText');
+  var btnHtml = document.getElementById('diagGetHtml');
+  var btnParas = document.getElementById('diagParagraphs');
+  var btnOoxml = document.getElementById('diagGetOoxml');
+  var btnClear = document.getElementById('diagClearResults');
+
+  if (btnClear) {
+    btnClear.addEventListener('click', function () {
+      var el = document.getElementById('diag-results');
+      if (el) el.textContent = '';
+    });
+  }
+
+  if (btnText) {
+    btnText.addEventListener('click', function () {
+      diagLog('Testing body.load("text") + context.sync()...');
+      wordRunWithTimeout(async function (context) {
+        context.document.body.load('text');
+        await context.sync();
+        diagLog('✅ body.text works! Length: ' + context.document.body.text.length);
+        diagLog('   First 120 chars: ' + context.document.body.text.substring(0, 120));
+      }, 6000).catch(function (e) {
+        diagLog('❌ body.load("text") FAILED: ' + e.message);
+      });
+    });
+  }
+
+  if (btnHtml) {
+    btnHtml.addEventListener('click', function () {
+      diagLog('Testing body.getHtml() + context.sync()...');
+      wordRunWithTimeout(async function (context) {
+        var html = context.document.body.getHtml();
+        await context.sync();
+        diagLog('✅ body.getHtml works! Length: ' + html.value.length);
+        diagLog('   First 200 chars: ' + html.value.substring(0, 200));
+      }, 6000).catch(function (e) {
+        diagLog('❌ body.getHtml() FAILED: ' + e.message);
+      });
+    });
+  }
+
+  if (btnParas) {
+    btnParas.addEventListener('click', function () {
+      diagLog('Testing body.paragraphs.load("text") + context.sync()...');
+      wordRunWithTimeout(async function (context) {
+        var paragraphs = context.document.body.paragraphs;
+        paragraphs.load('text');
+        await context.sync();
+        diagLog('✅ paragraphs loaded! Count: ' + paragraphs.items.length);
+        var maxShow = Math.min(paragraphs.items.length, 10);
+        for (var i = 0; i < maxShow; i++) {
+          diagLog('   P' + i + ': ' + paragraphs.items[i].text.substring(0, 80));
+        }
+        if (paragraphs.items.length > maxShow) {
+          diagLog('   ... (' + (paragraphs.items.length - maxShow) + ' more)');
+        }
+      }, 6000).catch(function (e) {
+        diagLog('❌ paragraphs.load("text") FAILED: ' + e.message);
+      });
+    });
+  }
+
+  if (btnOoxml) {
+    btnOoxml.addEventListener('click', function () {
+      diagLog('Testing body.getOoxml() + context.sync() (KNOWN BROKEN)...');
+      wordRunWithTimeout(async function (context) {
+        var ooxml = context.document.body.getOoxml();
+        await context.sync();
+        diagLog('✅ getOoxml works! Length: ' + ooxml.value.length);
+      }, 6000).catch(function (e) {
+        diagLog('❌ body.getOoxml() FAILED: ' + e.message);
+      });
+    });
+  }
+});

@@ -153,6 +153,23 @@
                 Generate Offer & Reset Form
               </button>
             </div>
+
+            <!-- Diagnostic Buttons (temporary — remove once Word.run issue is resolved) -->
+            <div class="form-section" style="border-top: 2px dashed #e74c3c; margin-top: 16px; padding-top: 12px;">
+              <div class="section-header">
+                <h2 style="color: #e74c3c;">API Diagnostics</h2>
+              </div>
+              <div class="section-content">
+                <div id="diag-results" style="font-family: monospace; font-size: 11px; background: #f8f8f8; padding: 8px; border-radius: 4px; max-height: 200px; overflow-y: auto; margin-bottom: 8px; white-space: pre-wrap;"></div>
+                <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                  <button type="button" id="diagBodyText" class="btn" style="font-size: 12px; padding: 6px 10px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer;">Test body.load('text')</button>
+                  <button type="button" id="diagGetHtml" class="btn" style="font-size: 12px; padding: 6px 10px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer;">Test body.getHtml()</button>
+                  <button type="button" id="diagParagraphs" class="btn" style="font-size: 12px; padding: 6px 10px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer;">Test paragraphs.load</button>
+                  <button type="button" id="diagGetOoxml" class="btn" style="font-size: 12px; padding: 6px 10px; background: #e67e22; color: white; border: none; border-radius: 4px; cursor: pointer;">Test getOoxml (known broken)</button>
+                  <button type="button" id="diagClearResults" class="btn" style="font-size: 12px; padding: 6px 10px; background: #95a5a6; color: white; border: none; border-radius: 4px; cursor: pointer;">Clear</button>
+                </div>
+              </div>
+            </div>
           </form>
         </div>
       </main>

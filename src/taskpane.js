@@ -1,31 +1,22 @@
 /**
  * Handl Offer Letter Generator - Taskpane Integration Layer
  *
- * STRATEGY: Capture → Replace in Memory → Download
- * 1. User fills in form on the taskpane
- * 2. Clicks "Generate & Download"
- * 3. Add-in reads the template document bytes via getFileAsync
- * 4. Uses JSZip to open the .docx in memory
- * 5. Replaces all placeholders in word/document.xml
- * 6. Downloads the modified .docx as Handl_Offer_Letter_[Name].docx
+ * STRATEGY:
+ * - Live Preview: Paragraphs API (load paragraph text → find/replace in JS → insertText)
+ * - Download: JSZip (read template bytes → replace in XML → download .docx)
+ * - Revert: Paragraphs API (replace current values back to original placeholders)
  *
- * The template is NEVER modified. All work happens in memory.
+ * NO OOXML round-trip. The OOXML approach caused malformed XML errors and hangs.
  */
-console.log('[taskpane.js] v3.0 loaded');
+console.log('[taskpane.js] v4.0 loaded');
 
 // Cache template bytes so we only call getFileAsync once.
-// This fixes the "Error reading template" bug on 2nd+ generation —
-// Word Online doesn't reliably support rapid consecutive getFileAsync calls.
 let cachedTemplateBytes = null;
 
-// Cache the original body OOXML so we can restore it wholesale on revert.
-// This avoids the race condition of field-by-field replacement during form reset.
-let cachedBodyOoxml = null;
-
-// ===== LIVE PREVIEW SYSTEM =====
+// ===== LIVE PREVIEW SYSTEM (Paragraphs API) =====
 // Tracks what's currently displayed in the document for each placeholder.
-// On field change: search for current text, replace with form value.
-// On generate+reset: restore cached original OOXML wholesale.
+// On field change: load paragraphs → find text → insertText replacement.
+// On generate+reset: same approach, replace values back to placeholders.
 
 const SIMPLE_PLACEHOLDERS = [
   '[NAME]', '[TITLE]', '[START DATE]', '[SUPERVISOR]', '[SALARY]',
@@ -43,11 +34,11 @@ previewState['__EXEMPT_CLASS__'] = '[EXEMPT]';
 previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
 
 let previewRefreshTimer = null;
-let previewRunning = false; // Lock to prevent concurrent Word.run calls
-let revertInProgress = false; // Hard block: suppresses ALL preview scheduling during revert
+let previewRunning = false;
+let revertInProgress = false;
+
 /**
- * Wrap a Word.run call with a timeout. If the Promise doesn't resolve
- * within the given ms, reject with a timeout error so the system can recover.
+ * Wrap a Word.run call with a timeout.
  */
 function wordRunWithTimeout(fn, timeoutMs) {
   return Promise.race([
@@ -59,8 +50,7 @@ function wordRunWithTimeout(fn, timeoutMs) {
 }
 
 /**
- * Compute what each placeholder slot should currently display, based on form state.
- * Empty fields fall back to the original placeholder text (no change in doc).
+ * Compute desired display values from form state.
  */
 function getDesiredPreview() {
   const raw = window.getFormData();
@@ -85,17 +75,17 @@ function getDesiredPreview() {
 }
 
 /**
- * Replace text in the document using OOXML get/set.
- * Avoids the Word search API entirely (which hangs on bracket characters).
- * Gets the body OOXML, does string replacement in JS, sets it back.
- * Also caches the original OOXML on first call (for revert after generate).
- * Everything happens in a SINGLE Word.run call to avoid concurrent API issues.
+ * Replace text in the document using the Paragraphs API.
+ * Loads all paragraphs, finds those containing 'from' text, and replaces
+ * the entire paragraph text with the substitution applied.
+ * All changes are batched in a SINGLE Word.run with ONE context.sync().
+ *
  * @param {Array<{from: string, to: string}>} changes
  */
 async function replaceInDocument(changes) {
   if (changes.length === 0) return;
 
-  // Save current focus so we can restore it after insertOoxml steals it
+  // Save focus
   var savedEl = document.activeElement;
   var savedStart = null;
   var savedEnd = null;
@@ -106,36 +96,42 @@ async function replaceInDocument(changes) {
 
   try {
     await wordRunWithTimeout(async function (context) {
-      var ooxmlResult = context.document.body.getOoxml();
+      var paragraphs = context.document.body.paragraphs;
+      paragraphs.load('text');
       await context.sync();
 
-      var xml = ooxmlResult.value;
+      // For each paragraph, apply all matching changes
+      var replacementCount = 0;
+      for (var i = 0; i < paragraphs.items.length; i++) {
+        var para = paragraphs.items[i];
+        var text = para.text;
+        var newText = text;
 
-      // Cache original OOXML on first call (before any modifications)
-      if (!cachedBodyOoxml) {
-        cachedBodyOoxml = xml;
-        console.log('Body OOXML cached (' + cachedBodyOoxml.length + ' chars)');
+        for (var j = 0; j < changes.length; j++) {
+          if (newText.indexOf(changes[j].from) !== -1) {
+            newText = newText.split(changes[j].from).join(changes[j].to);
+          }
+        }
+
+        if (newText !== text) {
+          // Replace the entire paragraph text content
+          para.insertText(newText, 'Replace');
+          replacementCount++;
+        }
       }
 
-      // Do all replacements on the XML string
-      for (var i = 0; i < changes.length; i++) {
-        var fromXml = escapeXml(changes[i].from);
-        var toXml = escapeXml(changes[i].to);
-        var before = xml;
-        xml = xml.split(fromXml).join(toXml);
-        var replaced = (before !== xml);
-        console.log((replaced ? '✓' : '✗') + ' "' + changes[i].from + '" → "' + changes[i].to + '"');
+      if (replacementCount > 0) {
+        await context.sync();
+        console.log('Replaced text in ' + replacementCount + ' paragraph(s)');
+      } else {
+        console.log('No matching paragraphs found for changes');
       }
-
-      // Set the modified OOXML back
-      context.document.body.insertOoxml(xml, "Replace");
-      await context.sync();
-    }, 8000);
+    }, 10000);
   } catch (e) {
     console.error('replaceInDocument error:', e);
   }
 
-  // Restore focus to the form field that was active before insertOoxml stole it
+  // Restore focus
   if (savedEl && savedEl.closest && savedEl.closest('#offerForm')) {
     try {
       savedEl.focus();
@@ -148,21 +144,18 @@ async function replaceInDocument(changes) {
 
 /**
  * Refresh the live preview — compare desired values to current state, update changed ones.
- * Uses a single batched Word.run call for all changes.
  */
 async function refreshPreview() {
   const desired = getDesiredPreview();
   const changes = [];
 
-  // EXEMPT eligibility FIRST (more specific phrase match)
+  // EXEMPT eligibility FIRST (more specific phrase)
   if (previewState['__EXEMPT_ELIG__'] !== desired['__EXEMPT_ELIG__']) {
     changes.push({ from: previewState['__EXEMPT_ELIG__'], to: desired['__EXEMPT_ELIG__'], key: '__EXEMPT_ELIG__' });
   }
-  // EXEMPT classification
   if (previewState['__EXEMPT_CLASS__'] !== desired['__EXEMPT_CLASS__']) {
     changes.push({ from: previewState['__EXEMPT_CLASS__'], to: desired['__EXEMPT_CLASS__'], key: '__EXEMPT_CLASS__' });
   }
-  // All simple placeholders
   for (const p of SIMPLE_PLACEHOLDERS) {
     if (previewState[p] !== desired[p]) {
       changes.push({ from: previewState[p], to: desired[p], key: p });
@@ -171,21 +164,17 @@ async function refreshPreview() {
 
   if (changes.length === 0) return;
 
-  // OOXML caching now happens inside replaceInDocument (single Word.run call)
   console.log('Preview: updating ' + changes.length + ' field(s)');
-
   await replaceInDocument(changes);
 
-  // Update state after successful batch
+  // Update state after successful replacement
   for (var i = 0; i < changes.length; i++) {
     previewState[changes[i].key] = changes[i].to;
   }
 }
 
 /**
- * Schedule a preview refresh with short debounce (100ms).
- * Triggered on field blur (not every keystroke), so the debounce is just
- * to coalesce rapid-fire blur/focus events when tabbing between fields.
+ * Schedule a preview refresh with 300ms debounce.
  */
 window.schedulePreviewRefresh = function () {
   if (revertInProgress) {
@@ -216,61 +205,45 @@ window.schedulePreviewRefresh = function () {
 };
 
 /**
- * Revert document to original template state by restoring cached body OOXML wholesale.
- * This avoids the race condition of field-by-field replacement during form reset.
- * Falls back to field-by-field if cached OOXML is not available.
+ * Revert document to original template state using paragraphs API.
+ * Replaces current displayed values back to their original placeholder text.
  */
 async function revertDocument() {
-  if (cachedBodyOoxml) {
-    // WHOLESALE RESTORE — single insertOoxml call, no field-by-field matching needed
-    console.log('Reverting document via cached OOXML restore...');
-    try {
-      await wordRunWithTimeout(async function (context) {
-        context.document.body.insertOoxml(cachedBodyOoxml, "Replace");
-        await context.sync();
-      }, 10000);
-      console.log('Document restored to original template');
-    } catch (e) {
-      console.error('Wholesale OOXML restore failed:', e);
-    }
-  } else {
-    // Fallback: field-by-field replacement (less reliable)
-    console.warn('No cached OOXML — falling back to field-by-field revert');
-    const changes = [];
-    for (const p of SIMPLE_PLACEHOLDERS) {
-      if (previewState[p] !== p) {
-        changes.push({ from: previewState[p], to: p, key: p });
-      }
-    }
-    if (previewState['__EXEMPT_CLASS__'] !== '[EXEMPT]') {
-      changes.push({ from: previewState['__EXEMPT_CLASS__'], to: '[EXEMPT]', key: '__EXEMPT_CLASS__' });
-    }
-    if (previewState['__EXEMPT_ELIG__'] !== 'will [EXEMPT] be eligible') {
-      changes.push({ from: previewState['__EXEMPT_ELIG__'], to: 'will [EXEMPT] be eligible', key: '__EXEMPT_ELIG__' });
-    }
-    if (changes.length > 0) {
-      console.log('Reverting ' + changes.length + ' placeholder(s) field-by-field');
-      await replaceInDocument(changes);
+  console.log('Reverting document via paragraphs API...');
+  const changes = [];
+
+  // EXEMPT eligibility FIRST (more specific phrase)
+  if (previewState['__EXEMPT_ELIG__'] !== 'will [EXEMPT] be eligible') {
+    changes.push({ from: previewState['__EXEMPT_ELIG__'], to: 'will [EXEMPT] be eligible' });
+  }
+  if (previewState['__EXEMPT_CLASS__'] !== '[EXEMPT]') {
+    changes.push({ from: previewState['__EXEMPT_CLASS__'], to: '[EXEMPT]' });
+  }
+  for (const p of SIMPLE_PLACEHOLDERS) {
+    if (previewState[p] !== p) {
+      changes.push({ from: previewState[p], to: p });
     }
   }
 
-  // Reset previewState to original placeholders regardless of method
+  if (changes.length > 0) {
+    console.log('Reverting ' + changes.length + ' placeholder(s)');
+    await replaceInDocument(changes);
+  }
+
+  // Reset previewState
   for (const p of SIMPLE_PLACEHOLDERS) {
     previewState[p] = p;
   }
   previewState['__EXEMPT_CLASS__'] = '[EXEMPT]';
   previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
+  console.log('Document reverted to placeholders');
 }
 
 /**
- * Pre-cache template bytes is NO LONGER triggered on focusin.
- * getFileAsync hangs from focusin in Word Online (not a valid user gesture).
- * Template bytes are now cached on-demand in generateAndDownload() (button click).
- * Body OOXML is cached lazily in refreshPreview() under the previewRunning lock.
- * This function is kept as a no-op for backward compatibility.
+ * No-op — kept for backward compatibility.
  */
 window.preCacheTemplateBytes = async function () {
-  console.log('preCacheTemplateBytes called (no-op — caching happens on demand)');
+  console.log('preCacheTemplateBytes called (no-op)');
 };
 
 // Guard against double initialization (Word Online loads scripts twice in separate JS contexts).
@@ -510,15 +483,28 @@ window.generateAndDownload = async function () {
       btn.textContent = 'Generating & Resetting...';
     }
 
-    // STEP 1: Get template bytes (pre-cached on first form focus)
+    // STEP 1: Get template bytes.
+    // On first Generate: revert doc to placeholders FIRST, then read clean bytes.
+    // On subsequent generates: use cached bytes (already clean).
     let templateBytes;
     try {
       if (cachedTemplateBytes) {
         console.log('Using cached template bytes');
         templateBytes = cachedTemplateBytes;
       } else {
-        // Fallback: try reading now (we're in a button click = user gesture)
-        console.log('Cache miss — reading template bytes from button click...');
+        // First generate: revert document to original placeholders before reading bytes
+        console.log('First generate — reverting doc to get clean template bytes...');
+        previewRunning = true;
+        try {
+          await revertDocument();
+          console.log('Document reverted before byte capture');
+        } catch (e) {
+          console.warn('Pre-read revert failed, reading current doc:', e);
+        }
+        previewRunning = false;
+
+        // Now read the (hopefully clean) template bytes
+        console.log('Reading template bytes from button click...');
         templateBytes = await getDocumentBytes();
         cachedTemplateBytes = templateBytes;
         console.log('Template bytes cached (' + templateBytes.length + ' bytes)');

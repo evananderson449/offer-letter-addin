@@ -8,7 +8,7 @@
  *
  * NO OOXML round-trip. The OOXML approach caused malformed XML errors and hangs.
  */
-console.log('[taskpane.js] v4.0 loaded');
+console.log('[taskpane.js] v4.1 loaded');
 
 // Cache template bytes so we only call getFileAsync once.
 let cachedTemplateBytes = null;

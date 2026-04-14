@@ -11,7 +11,7 @@
  *
  * The template is NEVER modified. All work happens in memory.
  */
-console.log('[taskpane.js] v2.2 loaded');
+console.log('[taskpane.js] v2.3 loaded');
 
 // Cache template bytes so we only call getFileAsync once.
 // This fixes the "Error reading template" bug on 2nd+ generation —
@@ -45,7 +45,18 @@ previewState['__EXEMPT_ELIG__'] = 'will [EXEMPT] be eligible';
 let previewRefreshTimer = null;
 let previewRunning = false; // Lock to prevent concurrent Word.run calls
 let revertInProgress = false; // Hard block: suppresses ALL preview scheduling during revert
-let ooxmlCacheInProgress = false; // Blocks preview while OOXML caching Word.run is active
+/**
+ * Wrap a Word.run call with a timeout. If the Promise doesn't resolve
+ * within the given ms, reject with a timeout error so the system can recover.
+ */
+function wordRunWithTimeout(fn, timeoutMs) {
+  return Promise.race([
+    Word.run(fn),
+    new Promise(function (_, reject) {
+      setTimeout(function () { reject(new Error('Word.run timed out after ' + timeoutMs + 'ms')); }, timeoutMs);
+    })
+  ]);
+}
 
 /**
  * Compute what each placeholder slot should currently display, based on form state.
@@ -77,6 +88,8 @@ function getDesiredPreview() {
  * Replace text in the document using OOXML get/set.
  * Avoids the Word search API entirely (which hangs on bracket characters).
  * Gets the body OOXML, does string replacement in JS, sets it back.
+ * Also caches the original OOXML on first call (for revert after generate).
+ * Everything happens in a SINGLE Word.run call to avoid concurrent API issues.
  * @param {Array<{from: string, to: string}>} changes
  */
 async function replaceInDocument(changes) {
@@ -92,13 +105,19 @@ async function replaceInDocument(changes) {
   }
 
   try {
-    await Word.run(async (context) => {
-      // Get the body OOXML (contains all text + formatting)
+    await wordRunWithTimeout(async function (context) {
       var ooxmlResult = context.document.body.getOoxml();
       await context.sync();
 
-      // Do all replacements on the XML string
       var xml = ooxmlResult.value;
+
+      // Cache original OOXML on first call (before any modifications)
+      if (!cachedBodyOoxml) {
+        cachedBodyOoxml = xml;
+        console.log('Body OOXML cached (' + cachedBodyOoxml.length + ' chars)');
+      }
+
+      // Do all replacements on the XML string
       for (var i = 0; i < changes.length; i++) {
         var fromXml = escapeXml(changes[i].from);
         var toXml = escapeXml(changes[i].to);
@@ -111,7 +130,7 @@ async function replaceInDocument(changes) {
       // Set the modified OOXML back
       context.document.body.insertOoxml(xml, "Replace");
       await context.sync();
-    });
+    }, 8000);
   } catch (e) {
     console.error('replaceInDocument error:', e);
   }
@@ -152,22 +171,7 @@ async function refreshPreview() {
 
   if (changes.length === 0) return;
 
-  // Lazy-cache body OOXML on first preview (before any modifications).
-  // Runs under the previewRunning lock so no other Word.run can overlap.
-  if (!cachedBodyOoxml) {
-    console.log('Caching body OOXML before first preview...');
-    try {
-      await Word.run(async (context) => {
-        var ooxmlResult = context.document.body.getOoxml();
-        await context.sync();
-        cachedBodyOoxml = ooxmlResult.value;
-        console.log('Body OOXML cached (' + cachedBodyOoxml.length + ' chars)');
-      });
-    } catch (e) {
-      console.warn('OOXML cache failed (field-by-field revert fallback available):', e);
-    }
-  }
-
+  // OOXML caching now happens inside replaceInDocument (single Word.run call)
   console.log('Preview: updating ' + changes.length + ' field(s)');
 
   await replaceInDocument(changes);
@@ -191,7 +195,7 @@ window.schedulePreviewRefresh = function () {
   if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
   previewRefreshTimer = setTimeout(async function () {
     if (revertInProgress) return;
-    if (previewRunning || ooxmlCacheInProgress) {
+    if (previewRunning) {
       console.log('Preview busy, re-scheduling...');
       previewRefreshTimer = setTimeout(function () {
         window.schedulePreviewRefresh();
@@ -221,10 +225,10 @@ async function revertDocument() {
     // WHOLESALE RESTORE — single insertOoxml call, no field-by-field matching needed
     console.log('Reverting document via cached OOXML restore...');
     try {
-      await Word.run(async (context) => {
+      await wordRunWithTimeout(async function (context) {
         context.document.body.insertOoxml(cachedBodyOoxml, "Replace");
         await context.sync();
-      });
+      }, 10000);
       console.log('Document restored to original template');
     } catch (e) {
       console.error('Wholesale OOXML restore failed:', e);
@@ -269,8 +273,15 @@ window.preCacheTemplateBytes = async function () {
   console.log('preCacheTemplateBytes called (no-op — caching happens on demand)');
 };
 
+// Guard against double initialization (Word Online loads scripts twice)
+let _initialized = false;
 Office.onReady(function (info) {
-  console.log('[Office.onReady] host=' + info.host + ', platform=' + info.platform);
+  console.log('[Office.onReady] host=' + info.host + ', platform=' + info.platform + ', already=' + _initialized);
+  if (_initialized) {
+    console.log('Skipping duplicate initialization');
+    return;
+  }
+  _initialized = true;
   if (info.host === Office.HostType.Word) {
     console.log('Handl Offer Letter Generator ready — initializing form...');
     window.initFormState();

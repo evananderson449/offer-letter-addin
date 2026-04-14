@@ -11,6 +11,7 @@
  *
  * The template is NEVER modified. All work happens in memory.
  */
+console.log('[taskpane.js] v2.0 loaded');
 
 // Cache template bytes so we only call getFileAsync once.
 // This fixes the "Error reading template" bug on 2nd+ generation —
@@ -200,13 +201,15 @@ window.schedulePreviewRefresh = function () {
     }
     previewRunning = true;
     try {
+      console.log('Preview refresh starting...');
       await refreshPreview();
+      console.log('Preview refresh complete');
     } catch (e) {
       console.error('Preview refresh error:', e);
     } finally {
       previewRunning = false;
     }
-  }, 100);
+  }, 300);
 };
 
 /**
@@ -275,10 +278,14 @@ window.preCacheTemplateBytes = async function () {
 };
 
 Office.onReady(function (info) {
+  console.log('[Office.onReady] host=' + info.host + ', platform=' + info.platform);
   if (info.host === Office.HostType.Word) {
-    console.log('Handl Offer Letter Generator ready');
+    console.log('Handl Offer Letter Generator ready — initializing form...');
     window.initFormState();
     window.initializeAddIn();
+    console.log('Form initialized, event listeners attached');
+  } else {
+    console.warn('Not running in Word — host is: ' + info.host);
   }
 });
 
@@ -563,8 +570,14 @@ window.generateAndDownload = async function () {
     }
 
     // STEP 6: Revert document (wholesale OOXML restore), then unblock
+    // 10-second timeout safety valve — download already succeeded, revert is best-effort
     try {
-      await revertDocument();
+      await Promise.race([
+        revertDocument(),
+        new Promise(function (_, reject) {
+          setTimeout(function () { reject(new Error('Revert timed out after 10s')); }, 10000);
+        })
+      ]);
       console.log('Document reverted to placeholders');
     } catch (e) {
       console.error('Revert failed (download succeeded):', e);

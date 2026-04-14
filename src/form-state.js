@@ -2,6 +2,7 @@
  * Form State Management for Offer Letter Generator
  * Handles form initialization, state tracking, validation, and auto-calculations
  */
+console.log('[form-state.js] v2.0 loaded');
 
 // Constants
 const TOTAL_SHARES = 21231806;
@@ -157,11 +158,21 @@ function initFormState() {
     }, { once: true });
   }
 
-  // Live preview: trigger preview refresh when user leaves a field (blur)
-  // or changes a select/checkbox (change). Using blur instead of input avoids
-  // mid-typing interruptions and the OOXML round-trip only fires once per field.
+  // Live preview: trigger on focusout (when leaving a field) AND input (while typing).
+  // focusout fires once per field (clean), input fires per keystroke (responsive).
+  // The 100ms debounce + previewRunning lock prevent excessive Word.run calls.
   if (form) {
     form.addEventListener('focusout', function (e) {
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) {
+        console.log('[focusout] field=' + e.target.id);
+        if (typeof window.schedulePreviewRefresh === 'function') {
+          window.schedulePreviewRefresh();
+        } else {
+          console.warn('[focusout] schedulePreviewRefresh not defined!');
+        }
+      }
+    });
+    form.addEventListener('input', function (e) {
       if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) {
         if (typeof window.schedulePreviewRefresh === 'function') {
           window.schedulePreviewRefresh();
@@ -169,13 +180,14 @@ function initFormState() {
       }
     });
     form.addEventListener('change', function (e) {
-      // Immediate update for selects and checkboxes (no typing involved)
       if (e.target && (e.target.tagName === 'SELECT' || e.target.type === 'checkbox')) {
+        console.log('[change] field=' + e.target.id);
         if (typeof window.schedulePreviewRefresh === 'function') {
           window.schedulePreviewRefresh();
         }
       }
     });
+    console.log('[initFormState] Preview event listeners attached (focusout + input + change)');
   }
 }
 

@@ -2,7 +2,7 @@
  * Form State Management for Offer Letter Generator
  * Handles form initialization, state tracking, validation, and auto-calculations
  */
-console.log('[form-state.js] v2.0 loaded');
+console.log('[form-state.js] v2.1 loaded');
 
 // Constants
 const TOTAL_SHARES = 21231806;
